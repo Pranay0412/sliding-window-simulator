@@ -19,15 +19,12 @@ export function useSimulator() {
   // Fault injection refs (immediate, non-batched)
   const pendingDropFrameRef = useRef<boolean>(false);
   const pendingDropAckRef = useRef<boolean>(false);
-  // GBN reverse-channel wave fault ref: ensures entire flight wave of ACKs is dropped
-  // so cumulative ACKs cannot bypass the loss and sender base timer triggers timeout & retransmission
-  const gbnDropAckBurstRef = useRef<boolean>(false);
 
   // Inbound ACK stream sequencing: ensures a clean 150ms visual gap between consecutive chips
   const nextAckDispatchTimeRef = useRef<number>(0);
 
-  // Active timers tracking
-  const activeTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  // Active timers tracking (all packet dispatches, stagger queues, arrivals, and timers)
+  const timerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
   const gbnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const srTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -38,16 +35,16 @@ export function useSimulator() {
 
   function safeSetTimeout(callback: () => void, ms: number): ReturnType<typeof setTimeout> {
     const timer = setTimeout(() => {
-      activeTimeoutsRef.current.delete(timer);
+      timerRefs.current = timerRefs.current.filter((t) => t !== timer);
       callback();
     }, ms);
-    activeTimeoutsRef.current.add(timer);
+    timerRefs.current.push(timer);
     return timer;
   }
 
   function clearAllTimers() {
-    activeTimeoutsRef.current.forEach((t) => clearTimeout(t));
-    activeTimeoutsRef.current.clear();
+    timerRefs.current.forEach(clearTimeout);
+    timerRefs.current = [];
 
     if (gbnTimerRef.current !== null) {
       clearTimeout(gbnTimerRef.current);
@@ -68,8 +65,9 @@ export function useSimulator() {
   }
 
   function checkCompletion(s: SimState) {
-    if (s.senderBase >= configRef.current.totalPackets && s.activePackets.length === 0) {
+    if (s.senderBase >= configRef.current.totalPackets || s.totalDelivered >= configRef.current.totalPackets) {
       s.isComplete = true;
+      clearAllTimers();
       appendLog(s, 'DELIVER', `Transmission complete: all ${configRef.current.totalPackets} frames delivered & confirmed.`);
       setPlayState('paused');
     }
@@ -82,9 +80,12 @@ export function useSimulator() {
       gbnTimerRef.current = null;
     }
     const timeoutMs = (configRef.current.timeoutDuration * 1000) / configRef.current.animationSpeed;
-    gbnTimerRef.current = setTimeout(() => {
+    const timer = setTimeout(() => {
+      gbnTimerRef.current = null;
       onGbnTimeout();
     }, timeoutMs);
+    gbnTimerRef.current = timer;
+    timerRefs.current.push(timer);
   }, []);
 
   const stopGbnTimer = useCallback(() => {
@@ -100,9 +101,11 @@ export function useSimulator() {
     }
     const timeoutMs = (configRef.current.timeoutDuration * 1000) / configRef.current.animationSpeed;
     const timer = setTimeout(() => {
+      srTimersRef.current.delete(seq);
       onSrTimeout(seq);
     }, timeoutMs);
     srTimersRef.current.set(seq, timer);
+    timerRefs.current.push(timer);
   }, []);
 
   const stopSrTimer = useCallback((seq: number) => {
@@ -117,7 +120,15 @@ export function useSimulator() {
     const s = { ...stateRef.current };
     const cfg = configRef.current;
 
-    if (!isRetransmission && seq >= cfg.totalPackets) return;
+    // Termination guard: do not dispatch if simulation is completed or stream end reached
+    if (
+      s.isComplete ||
+      s.totalDelivered >= cfg.totalPackets ||
+      (!isRetransmission && seq >= cfg.totalPackets) ||
+      (isRetransmission && s.senderBase >= cfg.totalPackets)
+    ) {
+      return;
+    }
 
     // Check fault injection immediately
     const isLost = pendingDropFrameRef.current;
@@ -134,7 +145,6 @@ export function useSimulator() {
       type: 'DATA',
       isRetransmission,
       isLost,
-      slotIndex: seq % cfg.windowSize,
       createdAt: Date.now(),
       durationMs,
     };
@@ -201,19 +211,12 @@ export function useSimulator() {
   // --- DISPATCH ACK (INBOUND LANE ↑) ---
   const sendAck = useCallback((ackNum: number, isCumulative: boolean, s: SimState) => {
     const cfg = configRef.current;
-    let isLost = false;
 
-    // Check fault injection right at ACK formation
-    if (cfg.protocol === 'gbn') {
-      if (gbnDropAckBurstRef.current) {
-        isLost = true;
-      }
-    } else {
-      if (pendingDropAckRef.current) {
-        pendingDropAckRef.current = false;
-        s.pendingDropAck = false;
-        isLost = true;
-      }
+    // Check fault injection right at ACK formation (targeted strictly to this specific ACK)
+    const isLost = pendingDropAckRef.current;
+    if (isLost) {
+      pendingDropAckRef.current = false;
+      s.pendingDropAck = false;
     }
 
     const durationMs = Math.round((cfg.propagationDelay * 1000) / cfg.animationSpeed);
@@ -230,7 +233,6 @@ export function useSimulator() {
         type: 'ACK',
         isLost,
         isCumulative,
-        slotIndex: ackNum % cfg.windowSize,
         createdAt: now,
         durationMs,
       };
@@ -265,7 +267,6 @@ export function useSimulator() {
           type: 'ACK',
           isLost,
           isCumulative,
-          slotIndex: ackNum % cfg.windowSize,
           createdAt: Date.now(),
           durationMs,
         };
@@ -495,14 +496,21 @@ export function useSimulator() {
 
   // --- TIMEOUT HANDLERS ---
   const onGbnTimeout = useCallback(() => {
-    if (playStateRef.current !== 'playing') return;
-    const s = { ...stateRef.current };
+    const cur = stateRef.current;
     const cfg = configRef.current;
-    const base = s.senderBase;
 
-    // Reset reverse channel ACK fault on timeout so retransmissions get acknowledged
-    gbnDropAckBurstRef.current = false;
-    s.pendingDropAck = false;
+    // Termination guard: stop ghost retransmissions if already completed or all delivered
+    if (
+      cur.isComplete ||
+      cur.totalDelivered >= cfg.totalPackets ||
+      cur.senderBase >= cfg.totalPackets ||
+      playStateRef.current !== 'playing'
+    ) {
+      return;
+    }
+
+    const s = { ...cur };
+    const base = s.senderBase;
 
     // Flash timeout warning on base frame
     const baseSlot = s.senderSlots.get(base);
@@ -526,7 +534,7 @@ export function useSimulator() {
     const staggerGap = Math.round(220 / cfg.animationSpeed);
     unacked.forEach((seq, idx) => {
       safeSetTimeout(() => {
-        if (playStateRef.current === 'playing') {
+        if (playStateRef.current === 'playing' && !stateRef.current.isComplete) {
           dispatchFrame(seq, true);
         }
       }, idx * staggerGap);
@@ -539,18 +547,31 @@ export function useSimulator() {
   }, [dispatchFrame, startGbnTimer]);
 
   const onSrTimeout = useCallback((seq: number) => {
-    if (playStateRef.current !== 'playing') return;
-    const s = { ...stateRef.current };
-    const slot = s.senderSlots.get(seq);
-    if (slot) {
-      slot.status = 'timeout';
-      slot.timeoutFlashUntil = Date.now() + 800;
+    const cur = stateRef.current;
+    const cfg = configRef.current;
+
+    // Termination guard: stop ghost retransmissions if already completed or all delivered
+    if (
+      cur.isComplete ||
+      cur.totalDelivered >= cfg.totalPackets ||
+      cur.senderBase >= cfg.totalPackets ||
+      playStateRef.current !== 'playing'
+    ) {
+      return;
     }
 
-    appendLog(s, 'TIMEOUT', `TIMEOUT for Frame #${seq}! Retransmitting selectively...`);
+    const s = { ...cur };
+    const slot = s.senderSlots.get(seq);
+    if (slot && slot.status !== 'acked') {
+      slot.status = 'timeout';
+      slot.timeoutFlashUntil = Date.now() + 800;
+      appendLog(s, 'TIMEOUT', `TIMEOUT for Frame #${seq}! Retransmitting selectively...`);
 
-    dispatchFrame(seq, true);
-    startSrTimer(seq);
+      dispatchFrame(seq, true);
+      startSrTimer(seq);
+      stateRef.current = s;
+      setState(s);
+    }
   }, [dispatchFrame, startSrTimer]);
 
   // --- USER ACTIONS ---
@@ -596,7 +617,6 @@ export function useSimulator() {
     clearAllTimers();
     pendingDropFrameRef.current = false;
     pendingDropAckRef.current = false;
-    gbnDropAckBurstRef.current = false;
     nextAckDispatchTimeRef.current = 0;
 
     const fresh = createFreshState(configRef.current);
@@ -651,43 +671,9 @@ export function useSimulator() {
   }, []);
 
   const toggleDropNextAck = useCallback(() => {
-    const s = { ...stateRef.current };
-    const cfg = configRef.current;
-
-    if (cfg.protocol === 'gbn') {
-      const willArm = !gbnDropAckBurstRef.current;
-      gbnDropAckBurstRef.current = willArm;
-      s.pendingDropAck = willArm;
-
-      if (willArm) {
-        // 1. Immediately drop any ACKs currently in-flight in reverse channel
-        let droppedAny = false;
-        s.activePackets = s.activePackets.map((pkt) => {
-          if (pkt.type === 'ACK' && !pkt.isLost) {
-            droppedAny = true;
-            return { ...pkt, isLost: true };
-          }
-          return pkt;
-        });
-
-        appendLog(
-          s,
-          'DROP',
-          droppedAny
-            ? `Reverse channel burst dropped: active in-flight ACK(s) killed ✕ (awaiting sender timeout)`
-            : `Reverse channel fault armed: in-flight wave ACKs will drop ✕ (awaiting sender timeout)`
-        );
-      } else {
-        appendLog(s, 'TX', `Reverse channel fault disarmed`);
-      }
-
-      stateRef.current = s;
-      setState(s);
-    } else {
-      const nextVal = !pendingDropAckRef.current;
-      pendingDropAckRef.current = nextVal;
-      setState((prev) => ({ ...prev, pendingDropAck: nextVal }));
-    }
+    const nextVal = !pendingDropAckRef.current;
+    pendingDropAckRef.current = nextVal;
+    setState((prev) => ({ ...prev, pendingDropAck: nextVal }));
   }, []);
 
   const updateConfig = useCallback((partial: Partial<SimConfig>) => {
@@ -712,6 +698,7 @@ export function useSimulator() {
     play,
     pause,
     reset,
+    handleReset: reset,
     stepForward,
     dropInFlight,
     toggleDropNextFrame,
@@ -755,7 +742,6 @@ function createFreshState(config: SimConfig): SimState {
       },
     ],
     gbnTimerStart: null,
-    gbnTimeoutFlashUntil: null,
     totalSent: 0,
     totalRetransmissions: 0,
     totalDelivered: 0,

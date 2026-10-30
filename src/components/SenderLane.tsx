@@ -17,19 +17,18 @@ export const SenderLane = React.memo(function SenderLane({ state, config }: Send
   const isAllDelivered = state.senderBase >= config.totalPackets;
 
   // Clamp right edge so window bracket never exceeds the last packet badge index (totalPackets - 1)
-  const startIndex = Math.min(state.senderBase, config.totalPackets - 1);
+  const startIndex = isAllDelivered ? 0 : Math.min(state.senderBase, config.totalPackets - 1);
   const endIndex = Math.min(state.senderBase + config.windowSize - 1, config.totalPackets - 1);
-  const slotsInWindow = Math.max(1, endIndex - startIndex + 1);
+  const activeSlotsCount = isAllDelivered
+    ? config.totalPackets
+    : Math.max(1, endIndex - startIndex + 1);
 
   // Position and width:
-  // When all delivered, wrap the final window inside buffer rail with celebration tag
-  const displayBase = isAllDelivered
-    ? Math.max(0, config.totalPackets - config.windowSize)
-    : startIndex;
+  // When all delivered, wrap the entire delivered buffer rail cleanly with [ ALL DELIVERED ]
   const bracketWidth = isAllDelivered
-    ? Math.min(config.totalPackets, config.windowSize) * STEP - GAP
-    : slotsInWindow * STEP - GAP;
-  const bracketX = displayBase * STEP;
+    ? config.totalPackets * STEP - GAP
+    : activeSlotsCount * STEP - GAP;
+  const bracketX = isAllDelivered ? 0 : startIndex * STEP;
 
   return (
     <div className="bg-[#09090b] border-b border-[#27272a] px-4 py-2.5 flex-shrink-0 select-none">

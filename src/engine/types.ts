@@ -22,8 +22,6 @@ export interface SimConfig {
   timeoutDuration: number;
   /** One-way propagation delay in seconds */
   propagationDelay: number;
-  /** Transmission stagger interval in ms between consecutive pipeline frames (e.g. 250ms) */
-  staggerMs: number;
   /** Animation speed multiplier */
   animationSpeed: number;
 }
@@ -35,7 +33,6 @@ export interface InFlightPacket {
   isRetransmission?: boolean;
   isLost?: boolean;
   isCumulative?: boolean;
-  slotIndex: number;
   createdAt: number;
   durationMs: number;
 }
@@ -72,7 +69,6 @@ export interface SimState {
   log: LogEntry[];
   /** GBN: single timer for oldest unacknowledged packet */
   gbnTimerStart: number | null;
-  gbnTimeoutFlashUntil: number | null;
   /** Telemetry counters */
   totalSent: number;
   totalRetransmissions: number;
@@ -90,7 +86,6 @@ export const DEFAULT_CONFIG: SimConfig = {
   totalPackets: 12,
   timeoutDuration: 5.0,
   propagationDelay: 2.0,
-  staggerMs: 250,
   animationSpeed: 1.0,
 };
 

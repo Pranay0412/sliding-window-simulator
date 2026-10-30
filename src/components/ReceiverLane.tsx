@@ -17,17 +17,18 @@ export const ReceiverLane = React.memo(function ReceiverLane({ state, config }: 
   const isAllReceived = state.receiverBase >= config.totalPackets;
 
   // Clamped indices so receiver window never overflows buffer rail
-  const startIndex = Math.min(state.receiverBase, config.totalPackets - 1);
+  const startIndex = isAllReceived ? 0 : Math.min(state.receiverBase, config.totalPackets - 1);
   const endIndex = Math.min(state.receiverBase + (isGbn ? 1 : config.windowSize) - 1, config.totalPackets - 1);
-  const slotsCount = isGbn ? 1 : Math.max(1, endIndex - startIndex + 1);
+  const slotsCount = isAllReceived
+    ? config.totalPackets
+    : isGbn
+      ? 1
+      : Math.max(1, endIndex - startIndex + 1);
 
-  const displayBase = isAllReceived
-    ? Math.max(0, config.totalPackets - (isGbn ? 1 : config.windowSize))
-    : startIndex;
   const bracketWidth = isAllReceived
-    ? (isGbn ? BOX_WIDTH : Math.min(config.totalPackets, config.windowSize) * STEP - GAP)
+    ? config.totalPackets * STEP - GAP
     : (isGbn ? BOX_WIDTH : slotsCount * STEP - GAP);
-  const bracketX = displayBase * STEP;
+  const bracketX = isAllReceived ? 0 : startIndex * STEP;
 
   return (
     <div className="bg-[#09090b] border-t border-[#27272a] px-4 py-2.5 flex-shrink-0 select-none">
