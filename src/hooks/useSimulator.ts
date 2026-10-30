@@ -16,20 +16,18 @@ export function useSimulator() {
   const configRef = useRef<SimConfig>(config);
   const playStateRef = useRef<PlayState>(playState);
 
-  // Fault injection refs (immediate, non-batched)
+  // Fault injection refs
   const pendingDropFrameRef = useRef<boolean>(false);
   const pendingDropAckRef = useRef<boolean>(false);
-  // GBN reverse-channel wave fault ref: ensures entire flight wave of ACKs is dropped
-  // so cumulative ACKs cannot bypass the loss and sender base timer triggers timeout & retransmission
   const gbnDropAckBurstRef = useRef<boolean>(false);
 
-  // Inbound ACK stream sequencing: ensures a clean 150ms visual gap between consecutive chips
+  // Inbound ACK stream sequencing
   const nextAckDispatchTimeRef = useRef<number>(0);
 
   // Active timers tracking
   const activeTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const gbnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const srTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const srTimersRef = useRef>>(new Map());
 
   // Keep refs synchronized
   stateRef.current = state;
@@ -59,17 +57,22 @@ export function useSimulator() {
   }
 
   function appendLog(s: SimState, tag: LogEntry['tag'], message: string) {
-    s.log.push({
-      id: uid('log'),
-      time: s.simTime,
-      tag,
-      message,
-    });
+    const nextLog: LogEntry[] = [
+      ...s.log,
+      {
+        id: uid('log'),
+        time: Number(s.simTime.toFixed(2)),
+        tag,
+        message,
+      },
+    ];
+    s.log = nextLog.slice(-50);
   }
 
   function checkCompletion(s: SimState) {
-    if (s.senderBase >= configRef.current.totalPackets && s.activePackets.length === 0) {
+    if (s.senderBase >= configRef.current.totalPackets) {
       s.isComplete = true;
+      clearAllTimers();
       appendLog(s, 'DELIVER', `Transmission complete: all ${configRef.current.totalPackets} frames delivered & confirmed.`);
       setPlayState('paused');
     }
@@ -117,7 +120,7 @@ export function useSimulator() {
     const s = { ...stateRef.current };
     const cfg = configRef.current;
 
-    if (!isRetransmission && seq >= cfg.totalPackets) return;
+    if (s.isComplete || (!isRetransmission && seq >= cfg.totalPackets)) return;
 
     // Check fault injection immediately
     const isLost = pendingDropFrameRef.current;
@@ -178,7 +181,6 @@ export function useSimulator() {
     setState(s);
 
     if (isLost) {
-      // Travels halfway, flashes [LOST], and dissolves without reaching receiver
       safeSetTimeout(() => {
         const cur = { ...stateRef.current };
         cur.activePackets = cur.activePackets.filter((p) => p.id !== pkt.id);
@@ -191,7 +193,6 @@ export function useSimulator() {
         setState(cur);
       }, Math.round(durationMs * 0.65));
     } else {
-      // Normal delivery to receiver at bottom
       safeSetTimeout(() => {
         onFrameArrival(pkt.id, seq);
       }, durationMs);
@@ -203,7 +204,6 @@ export function useSimulator() {
     const cfg = configRef.current;
     let isLost = false;
 
-    // Check fault injection right at ACK formation
     if (cfg.protocol === 'gbn') {
       if (gbnDropAckBurstRef.current) {
         isLost = true;
@@ -235,12 +235,10 @@ export function useSimulator() {
         durationMs,
       };
 
-      // Add ACK directly to activePackets so it renders traveling UPWARD
       s.activePackets = [...s.activePackets, ackPkt];
 
       if (isLost) {
         appendLog(s, 'DROP', `${isCumulative ? 'Cumulative' : 'Individual'} ACK #${ackNum} dispatched (fault injected: will drop in transit ✕)`);
-        // Travels halfway up, flashes [ACK LOST], and dissolves without reaching sender
         safeSetTimeout(() => {
           const cur = { ...stateRef.current };
           cur.activePackets = cur.activePackets.filter((p) => p.id !== ackPkt.id);
@@ -250,13 +248,11 @@ export function useSimulator() {
         }, Math.round(durationMs * 0.65));
       } else {
         appendLog(s, 'ACK_TX', `${isCumulative ? 'Cumulative' : 'Individual'} ACK #${ackNum} dispatched → Sender`);
-        // Arrives at sender when ACK reaches the top
         safeSetTimeout(() => {
           onAckArrival(ackPkt.id, ackNum, isCumulative);
         }, durationMs);
       }
     } else {
-      // Stagger ACK dispatch by dispatchDelay to maintain clean 150ms visual separation
       safeSetTimeout(() => {
         const cur = { ...stateRef.current };
         const curAckPkt: InFlightPacket = {
@@ -302,31 +298,25 @@ export function useSimulator() {
     const pkt = s.activePackets.find((p) => p.id === packetId);
     if (!pkt || pkt.isLost) return;
 
-    // Remove frame from active packets
     s.activePackets = s.activePackets.filter((p) => p.id !== packetId);
 
     if (cfg.protocol === 'gbn') {
       if (seq === s.receiverBase) {
-        // In-order frame received: deliver & advance receiver window
         s.receiverSlots.set(seq, { seq, state: 'delivered' });
         s.receiverBase += 1;
         s.totalDelivered += 1;
         appendLog(s, 'DELIVER', `Frame #${seq} accepted in-order → Delivered`);
-
-        // Send Cumulative ACK back to sender
         sendAck(seq, true, s);
       } else {
-        // Out-of-order frame: DISCARD and repeat last cumulative ACK
         appendLog(s, 'RX', `Frame #${seq} DISCARDED (expected #${s.receiverBase})`);
         if (s.receiverBase > 0) {
           sendAck(s.receiverBase - 1, true, s);
         }
       }
     } else {
-      // Selective Repeat (SR)
+      // Selective Repeat (SR): Always send ACK back for valid window frame
       const windowEnd = s.receiverBase + cfg.windowSize;
       if (seq >= s.receiverBase && seq < windowEnd) {
-        // Send individual ACK
         sendAck(seq, false, s);
 
         const slot = s.receiverSlots.get(seq);
@@ -334,7 +324,6 @@ export function useSimulator() {
 
         if (!alreadyGot) {
           if (seq === s.receiverBase) {
-            // Base arrived: deliver base and contiguous buffered frames
             s.receiverSlots.set(seq, { seq, state: 'delivered' });
             s.totalDelivered += 1;
             appendLog(s, 'DELIVER', `Frame #${seq} delivered to Application Layer`);
@@ -354,13 +343,12 @@ export function useSimulator() {
             s.receiverBase = next;
             appendLog(s, 'SLIDE', `Receiver window slid to #${next}`);
           } else {
-            // Buffer out-of-order frame
             s.receiverSlots.set(seq, { seq, state: 'buffered' });
             appendLog(s, 'BUFFER', `Frame #${seq} buffered out-of-order in receive window`);
           }
         }
       } else if (seq >= Math.max(0, s.receiverBase - cfg.windowSize) && seq < s.receiverBase) {
-        // Re-ACK previously delivered frame
+        // Explicitly re-ACK previously delivered frame to unlock sender window
         sendAck(seq, false, s);
       }
     }
@@ -377,7 +365,6 @@ export function useSimulator() {
     const ack = s.activePackets.find((p) => p.id === ackId);
     if (!ack || ack.isLost) return;
 
-    // Remove ACK from active channel
     s.activePackets = s.activePackets.filter((p) => p.id !== ackId);
 
     if (cfg.protocol === 'gbn') {
@@ -385,7 +372,6 @@ export function useSimulator() {
         const oldBase = s.senderBase;
         const newBase = ackNum + 1;
 
-        // Solid green confirmed for frames [oldBase .. ackNum]
         for (let i = oldBase; i <= ackNum; i++) {
           const slot = s.senderSlots.get(i);
           if (slot) {
@@ -398,19 +384,15 @@ export function useSimulator() {
         s.senderBase = newBase;
         appendLog(s, 'ACK_RX', `Cumulative ACK #${ackNum} arrived at sender. Confirmed frames [${oldBase} .. ${ackNum}]. Window slid to #${newBase}`);
 
-        // Timer reset:
-        if (newBase >= s.nextSeqNum) {
-          // All dispatched frames confirmed: stop timer
+        if (newBase >= s.nextSeqNum || newBase >= cfg.totalPackets) {
           s.gbnTimerStart = null;
           stopGbnTimer();
         } else {
-          // There are still unacknowledged frames in flight: restart timer for new base
           s.gbnTimerStart = Date.now();
           startGbnTimer();
         }
 
         // 1-for-1 sliding pipeline dispatch:
-        // As window slides right, dispatch newly opened slots
         const openLimit = Math.min(newBase + cfg.windowSize, cfg.totalPackets);
         const toEmit: number[] = [];
         for (let seq = s.nextSeqNum; seq < openLimit; seq++) {
@@ -424,7 +406,7 @@ export function useSimulator() {
         const staggerGap = Math.round(220 / cfg.animationSpeed);
         toEmit.forEach((seq, idx) => {
           safeSetTimeout(() => {
-            if (playStateRef.current === 'playing') {
+            if (playStateRef.current === 'playing' && !stateRef.current.isComplete) {
               dispatchFrame(seq, false);
             }
           }, idx * staggerGap);
@@ -446,7 +428,6 @@ export function useSimulator() {
         stopSrTimer(ackNum);
         appendLog(s, 'ACK_RX', `Individual ACK #${ackNum} arrived at sender. Confirmed Frame #${ackNum}`);
 
-        // Slide window forward past contiguous ACKed frames if ackNum === senderBase
         if (ackNum === s.senderBase) {
           let next = s.senderBase;
           while (next < cfg.totalPackets) {
@@ -461,7 +442,6 @@ export function useSimulator() {
           s.senderBase = next;
           appendLog(s, 'SLIDE', `Sender window slid forward by ${distance} slot(s) → Base #${next}`);
 
-          // 1-for-1 sliding pipeline dispatch into opened slots
           const openLimit = Math.min(next + cfg.windowSize, cfg.totalPackets);
           const toEmit: number[] = [];
           for (let seq = s.nextSeqNum; seq < openLimit; seq++) {
@@ -475,7 +455,7 @@ export function useSimulator() {
           const staggerGap = Math.round(220 / cfg.animationSpeed);
           toEmit.forEach((seq, idx) => {
             safeSetTimeout(() => {
-              if (playStateRef.current === 'playing') {
+              if (playStateRef.current === 'playing' && !stateRef.current.isComplete) {
                 dispatchFrame(seq, false);
               }
             }, idx * staggerGap);
@@ -498,22 +478,25 @@ export function useSimulator() {
     if (playStateRef.current !== 'playing') return;
     const s = { ...stateRef.current };
     const cfg = configRef.current;
+
+    if (s.isComplete || s.senderBase >= cfg.totalPackets) return;
     const base = s.senderBase;
 
-    // Reset reverse channel ACK fault on timeout so retransmissions get acknowledged
     gbnDropAckBurstRef.current = false;
     s.pendingDropAck = false;
 
-    // Flash timeout warning on base frame
     const baseSlot = s.senderSlots.get(base);
     if (baseSlot) {
       baseSlot.status = 'timeout';
       baseSlot.timeoutFlashUntil = Date.now() + 800;
     }
 
-    appendLog(s, 'TIMEOUT', `TIMEOUT on oldest unACKed Frame #${base}! Retransmitting window [${base}..${s.nextSeqNum - 1}]...`);
+    appendLog(
+      s,
+      'TIMEOUT',
+      `TIMEOUT on oldest unACKed Frame #${base}! Retransmitting window [${base}..${Math.max(base, s.nextSeqNum - 1)}]...`
+    );
 
-    // Retransmit all unacknowledged frames currently in the window
     const unacked: number[] = [];
     for (let i = base; i < s.nextSeqNum; i++) {
       const slot = s.senderSlots.get(i);
@@ -522,11 +505,10 @@ export function useSimulator() {
       }
     }
 
-    // Stagger retransmission with clean visual gap (stops packet clumping)
     const staggerGap = Math.round(220 / cfg.animationSpeed);
     unacked.forEach((seq, idx) => {
       safeSetTimeout(() => {
-        if (playStateRef.current === 'playing') {
+        if (playStateRef.current === 'playing' && !stateRef.current.isComplete) {
           dispatchFrame(seq, true);
         }
       }, idx * staggerGap);
@@ -541,17 +523,41 @@ export function useSimulator() {
   const onSrTimeout = useCallback((seq: number) => {
     if (playStateRef.current !== 'playing') return;
     const s = { ...stateRef.current };
+    const cfg = configRef.current;
+
+    if (s.isComplete || s.senderBase >= cfg.totalPackets) return;
+
     const slot = s.senderSlots.get(seq);
-    if (slot) {
+    if (slot && slot.status !== 'acked') {
       slot.status = 'timeout';
       slot.timeoutFlashUntil = Date.now() + 800;
+      appendLog(s, 'TIMEOUT', `TIMEOUT for Frame #${seq}! Retransmitting selectively...`);
+
+      dispatchFrame(seq, true);
+      startSrTimer(seq);
+      stateRef.current = s;
+      setState(s);
     }
-
-    appendLog(s, 'TIMEOUT', `TIMEOUT for Frame #${seq}! Retransmitting selectively...`);
-
-    dispatchFrame(seq, true);
-    startSrTimer(seq);
   }, [dispatchFrame, startSrTimer]);
+
+  // --- VIRTUAL SIMULATION CLOCK TICK ---
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    if (playState === 'playing') {
+      interval = setInterval(() => {
+        setState((prev) => {
+          if (prev.isComplete) return prev;
+          const nextTime = Number((prev.simTime + 0.05 * configRef.current.animationSpeed).toFixed(2));
+          const updated = { ...prev, simTime: nextTime };
+          stateRef.current = updated;
+          return updated;
+        });
+      }, 50);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [playState]);
 
   // --- USER ACTIONS ---
   const play = useCallback(() => {
@@ -561,7 +567,6 @@ export function useSimulator() {
     const s = { ...stateRef.current };
     const cfg = configRef.current;
 
-    // If starting initial burst from sequence 0: stagger dispatches cleanly
     if (s.nextSeqNum === 0) {
       const burstLimit = Math.min(cfg.windowSize, cfg.totalPackets);
       const staggerGap = Math.round(220 / cfg.animationSpeed);
@@ -573,7 +578,6 @@ export function useSimulator() {
         }, i * staggerGap);
       }
     } else {
-      // Resume existing timers
       if (cfg.protocol === 'gbn' && s.gbnTimerStart !== null) {
         startGbnTimer();
       }
@@ -612,7 +616,6 @@ export function useSimulator() {
     const s = stateRef.current;
     const cfg = configRef.current;
 
-    // Dispatch next frame if window has open slot
     if (s.nextSeqNum < Math.min(s.senderBase + cfg.windowSize, cfg.totalPackets)) {
       dispatchFrame(s.nextSeqNum, false);
     }
@@ -660,7 +663,6 @@ export function useSimulator() {
       s.pendingDropAck = willArm;
 
       if (willArm) {
-        // 1. Immediately drop any ACKs currently in-flight in reverse channel
         let droppedAny = false;
         s.activePackets = s.activePackets.map((pkt) => {
           if (pkt.type === 'ACK' && !pkt.isLost) {
