@@ -27,7 +27,7 @@ export function useSimulator() {
   // Active timers tracking
   const activeTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const gbnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const srTimersRef = useRef>>(new Map());
+  const srTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   // Keep refs synchronized
   stateRef.current = state;
@@ -122,7 +122,6 @@ export function useSimulator() {
 
     if (s.isComplete || (!isRetransmission && seq >= cfg.totalPackets)) return;
 
-    // Check fault injection immediately
     const isLost = pendingDropFrameRef.current;
     if (isLost) {
       pendingDropFrameRef.current = false;
@@ -137,7 +136,6 @@ export function useSimulator() {
       type: 'DATA',
       isRetransmission,
       isLost,
-      slotIndex: seq % cfg.windowSize,
       createdAt: Date.now(),
       durationMs,
     };
@@ -161,7 +159,6 @@ export function useSimulator() {
       s.totalRetransmissions += 1;
     }
 
-    // Go-Back-N: single timer for the oldest unacknowledged frame
     if (cfg.protocol === 'gbn' && s.gbnTimerStart === null) {
       s.gbnTimerStart = Date.now();
       startGbnTimer();
@@ -230,7 +227,6 @@ export function useSimulator() {
         type: 'ACK',
         isLost,
         isCumulative,
-        slotIndex: ackNum % cfg.windowSize,
         createdAt: now,
         durationMs,
       };
@@ -261,7 +257,6 @@ export function useSimulator() {
           type: 'ACK',
           isLost,
           isCumulative,
-          slotIndex: ackNum % cfg.windowSize,
           createdAt: Date.now(),
           durationMs,
         };
@@ -348,7 +343,7 @@ export function useSimulator() {
           }
         }
       } else if (seq >= Math.max(0, s.receiverBase - cfg.windowSize) && seq < s.receiverBase) {
-        // Explicitly re-ACK previously delivered frame to unlock sender window
+        // Re-ACK previously delivered frame
         sendAck(seq, false, s);
       }
     }
@@ -392,7 +387,7 @@ export function useSimulator() {
           startGbnTimer();
         }
 
-        // 1-for-1 sliding pipeline dispatch:
+        // 1-for-1 sliding pipeline dispatch
         const openLimit = Math.min(newBase + cfg.windowSize, cfg.totalPackets);
         const toEmit: number[] = [];
         for (let seq = s.nextSeqNum; seq < openLimit; seq++) {
@@ -757,7 +752,6 @@ function createFreshState(config: SimConfig): SimState {
       },
     ],
     gbnTimerStart: null,
-    gbnTimeoutFlashUntil: null,
     totalSent: 0,
     totalRetransmissions: 0,
     totalDelivered: 0,
