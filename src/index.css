@@ -1,0 +1,102 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  background-color: #09090b;
+  color: #d4d4d8;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Slim matte industrial scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Range input styling */
+input[type="range"] {
+  background: #27272a;
+  border-radius: 2px;
+}
+
+/* Hardware-Accelerated Channel Motion Keyframes (Decoupled from React Renders) */
+@keyframes travelDown {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(var(--travel-distance, 200px));
+    opacity: 0.85;
+  }
+}
+
+@keyframes travelUp {
+  0% {
+    transform: translateY(var(--travel-distance, 200px));
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 0.85;
+  }
+}
+
+.pkt-travel-down {
+  will-change: transform;
+  animation-name: travelDown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.ack-travel-up {
+  will-change: transform;
+  animation-name: travelUp;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
