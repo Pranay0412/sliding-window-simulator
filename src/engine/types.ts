@@ -33,6 +33,7 @@ export interface InFlightPacket {
   isRetransmission?: boolean;
   isLost?: boolean;
   isCumulative?: boolean;
+  slotIndex?: number;
   createdAt: number;
   durationMs: number;
 }
@@ -69,6 +70,7 @@ export interface SimState {
   log: LogEntry[];
   /** GBN: single timer for oldest unacknowledged packet */
   gbnTimerStart: number | null;
+  gbnTimeoutFlashUntil?: number | null;
   /** Telemetry counters */
   totalSent: number;
   totalRetransmissions: number;
