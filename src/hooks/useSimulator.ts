@@ -19,6 +19,9 @@ export function useSimulator() {
   // Fault injection refs (immediate, non-batched)
   const pendingDropFrameRef = useRef<boolean>(false);
   const pendingDropAckRef = useRef<boolean>(false);
+  // GBN reverse-channel wave fault ref: ensures entire flight wave of ACKs is dropped
+  // so cumulative ACKs cannot bypass the loss and sender base timer triggers timeout & retransmission
+  const gbnDropAckBurstRef = useRef<boolean>(false);
 
   // Inbound ACK stream sequencing: ensures a clean 150ms visual gap between consecutive chips
   const nextAckDispatchTimeRef = useRef<number>(0);
@@ -198,12 +201,19 @@ export function useSimulator() {
   // --- DISPATCH ACK (INBOUND LANE ↑) ---
   const sendAck = useCallback((ackNum: number, isCumulative: boolean, s: SimState) => {
     const cfg = configRef.current;
+    let isLost = false;
 
-    // Check fault injection right at ACK formation (targeted strictly to this specific ACK)
-    const isLost = pendingDropAckRef.current;
-    if (isLost) {
-      pendingDropAckRef.current = false;
-      s.pendingDropAck = false;
+    // Check fault injection right at ACK formation
+    if (cfg.protocol === 'gbn') {
+      if (gbnDropAckBurstRef.current) {
+        isLost = true;
+      }
+    } else {
+      if (pendingDropAckRef.current) {
+        pendingDropAckRef.current = false;
+        s.pendingDropAck = false;
+        isLost = true;
+      }
     }
 
     const durationMs = Math.round((cfg.propagationDelay * 1000) / cfg.animationSpeed);
@@ -490,6 +500,10 @@ export function useSimulator() {
     const cfg = configRef.current;
     const base = s.senderBase;
 
+    // Reset reverse channel ACK fault on timeout so retransmissions get acknowledged
+    gbnDropAckBurstRef.current = false;
+    s.pendingDropAck = false;
+
     // Flash timeout warning on base frame
     const baseSlot = s.senderSlots.get(base);
     if (baseSlot) {
@@ -582,6 +596,7 @@ export function useSimulator() {
     clearAllTimers();
     pendingDropFrameRef.current = false;
     pendingDropAckRef.current = false;
+    gbnDropAckBurstRef.current = false;
     nextAckDispatchTimeRef.current = 0;
 
     const fresh = createFreshState(configRef.current);
@@ -636,9 +651,43 @@ export function useSimulator() {
   }, []);
 
   const toggleDropNextAck = useCallback(() => {
-    const nextVal = !pendingDropAckRef.current;
-    pendingDropAckRef.current = nextVal;
-    setState((prev) => ({ ...prev, pendingDropAck: nextVal }));
+    const s = { ...stateRef.current };
+    const cfg = configRef.current;
+
+    if (cfg.protocol === 'gbn') {
+      const willArm = !gbnDropAckBurstRef.current;
+      gbnDropAckBurstRef.current = willArm;
+      s.pendingDropAck = willArm;
+
+      if (willArm) {
+        // 1. Immediately drop any ACKs currently in-flight in reverse channel
+        let droppedAny = false;
+        s.activePackets = s.activePackets.map((pkt) => {
+          if (pkt.type === 'ACK' && !pkt.isLost) {
+            droppedAny = true;
+            return { ...pkt, isLost: true };
+          }
+          return pkt;
+        });
+
+        appendLog(
+          s,
+          'DROP',
+          droppedAny
+            ? `Reverse channel burst dropped: active in-flight ACK(s) killed ✕ (awaiting sender timeout)`
+            : `Reverse channel fault armed: in-flight wave ACKs will drop ✕ (awaiting sender timeout)`
+        );
+      } else {
+        appendLog(s, 'TX', `Reverse channel fault disarmed`);
+      }
+
+      stateRef.current = s;
+      setState(s);
+    } else {
+      const nextVal = !pendingDropAckRef.current;
+      pendingDropAckRef.current = nextVal;
+      setState((prev) => ({ ...prev, pendingDropAck: nextVal }));
+    }
   }, []);
 
   const updateConfig = useCallback((partial: Partial<SimConfig>) => {
