@@ -19,6 +19,10 @@ export function useSimulator() {
   // Fault injection refs (immediate, non-batched)
   const pendingDropFrameRef = useRef<boolean>(false);
   const pendingDropAckRef = useRef<boolean>(false);
+  // In GBN, cumulative ACKs make dropping a single ACK unnoticeable if subsequent ACKs arrive.
+  // When drop-next-ACK is triggered, dropAckWaveRef flags the reverse channel outage to suppress
+  // subsequent cumulative ACKs until sender base timer expires, ensuring timeout & retransmission test.
+  const dropAckWaveRef = useRef<boolean>(false);
 
   // Active timers tracking
   const activeTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
@@ -195,12 +199,21 @@ export function useSimulator() {
   // --- DISPATCH ACK (INBOUND LANE ↑) ---
   const sendAck = useCallback((ackNum: number, isCumulative: boolean, s: SimState) => {
     const cfg = configRef.current;
+    let isLost = false;
 
     // Check fault injection right at ACK formation
-    const isLost = pendingDropAckRef.current;
-    if (isLost) {
+    if (pendingDropAckRef.current) {
       pendingDropAckRef.current = false;
       s.pendingDropAck = false;
+      isLost = true;
+      // In Go-Back-N, cumulative ACKs make dropping a single ACK unnoticeable if subsequent ACKs arrive.
+      // Flag the current in-flight wave so subsequent cumulative ACKs are also dropped until the sender times out.
+      if (cfg.protocol === 'gbn') {
+        dropAckWaveRef.current = true;
+      }
+    } else if (cfg.protocol === 'gbn' && dropAckWaveRef.current) {
+      // Subsequent cumulative ACK in current wave suppressed to guarantee GBN timeout test
+      isLost = true;
     }
 
     const durationMs = Math.round((cfg.propagationDelay * 1000) / cfg.animationSpeed);
@@ -220,7 +233,10 @@ export function useSimulator() {
     s.activePackets = [...s.activePackets, ackPkt];
 
     if (isLost) {
-      appendLog(s, 'DROP', `${isCumulative ? 'Cumulative' : 'Individual'} ACK #${ackNum} dispatched (fault injected: will drop in transit ✕)`);
+      const dropMsg = dropAckWaveRef.current && !pendingDropAckRef.current
+        ? `Cumulative ACK #${ackNum} suppressed (reverse channel outage until timeout) ✕`
+        : `${isCumulative ? 'Cumulative' : 'Individual'} ACK #${ackNum} dispatched (fault injected: will drop in transit ✕)`;
+      appendLog(s, 'DROP', dropMsg);
       // Travels halfway up, flashes [ACK LOST], and dissolves without reaching sender
       safeSetTimeout(() => {
         const cur = { ...stateRef.current };
@@ -365,12 +381,13 @@ export function useSimulator() {
         stateRef.current = s;
         setState(s);
 
+        const staggerGap = Math.round(220 / cfg.animationSpeed);
         toEmit.forEach((seq, idx) => {
           safeSetTimeout(() => {
             if (playStateRef.current === 'playing') {
               dispatchFrame(seq, false);
             }
-          }, idx * cfg.staggerMs);
+          }, idx * staggerGap);
         });
 
         checkCompletion(s);
@@ -415,12 +432,13 @@ export function useSimulator() {
           stateRef.current = s;
           setState(s);
 
+          const staggerGap = Math.round(220 / cfg.animationSpeed);
           toEmit.forEach((seq, idx) => {
             safeSetTimeout(() => {
               if (playStateRef.current === 'playing') {
                 dispatchFrame(seq, false);
               }
-            }, idx * cfg.staggerMs);
+            }, idx * staggerGap);
           });
         } else {
           stateRef.current = s;
@@ -442,6 +460,9 @@ export function useSimulator() {
     const cfg = configRef.current;
     const base = s.senderBase;
 
+    // Reset reverse channel outage flag on timeout so retransmitted frames get acknowledged
+    dropAckWaveRef.current = false;
+
     // Flash timeout warning on base frame
     const baseSlot = s.senderSlots.get(base);
     if (baseSlot) {
@@ -460,13 +481,14 @@ export function useSimulator() {
       }
     }
 
-    // Stagger retransmission (TU Berlin model)
+    // Stagger retransmission with clean visual gap (stops packet clumping)
+    const staggerGap = Math.round(220 / cfg.animationSpeed);
     unacked.forEach((seq, idx) => {
       safeSetTimeout(() => {
         if (playStateRef.current === 'playing') {
           dispatchFrame(seq, true);
         }
-      }, idx * cfg.staggerMs);
+      }, idx * staggerGap);
     });
 
     s.gbnTimerStart = Date.now();
@@ -498,15 +520,16 @@ export function useSimulator() {
     const s = { ...stateRef.current };
     const cfg = configRef.current;
 
-    // If starting initial burst from sequence 0
+    // If starting initial burst from sequence 0: stagger dispatches cleanly
     if (s.nextSeqNum === 0) {
       const burstLimit = Math.min(cfg.windowSize, cfg.totalPackets);
+      const staggerGap = Math.round(220 / cfg.animationSpeed);
       for (let i = 0; i < burstLimit; i++) {
         safeSetTimeout(() => {
           if (playStateRef.current === 'playing') {
             dispatchFrame(i, false);
           }
-        }, i * cfg.staggerMs);
+        }, i * staggerGap);
       }
     } else {
       // Resume existing timers
@@ -532,6 +555,7 @@ export function useSimulator() {
     clearAllTimers();
     pendingDropFrameRef.current = false;
     pendingDropAckRef.current = false;
+    dropAckWaveRef.current = false;
 
     const fresh = createFreshState(configRef.current);
     stateRef.current = fresh;

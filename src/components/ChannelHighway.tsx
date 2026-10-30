@@ -13,7 +13,7 @@ interface ChannelHighwayProps {
 
 export const ChannelHighway = React.memo(function ChannelHighway({
   state,
-  config,
+  config: _config,
   playState,
   onDropPacket,
 }: ChannelHighwayProps) {
@@ -35,6 +35,10 @@ export const ChannelHighway = React.memo(function ChannelHighway({
 
   const dataPackets = state.activePackets.filter((p) => p.type === 'DATA');
   const ackPackets = state.activePackets.filter((p) => p.type === 'ACK');
+
+  // Derive in-flight counters directly from active non-lost traveling chips
+  const activeDataInFlight = dataPackets.filter((p) => !p.isLost).length;
+  const activeAckInFlight = ackPackets.filter((p) => !p.isLost).length;
 
   return (
     <div
@@ -61,25 +65,24 @@ export const ChannelHighway = React.memo(function ChannelHighway({
             <span>Outbound (Frames ↓)</span>
           </div>
           <span className="text-[9px] font-mono text-zinc-500">
-            {dataPackets.length} in flight
+            {activeDataInFlight} in flight
           </span>
         </div>
 
-        {/* Hardware-Accelerated Channel Motion Stage */}
+        {/* Central trajectory guide line */}
+        <div className="absolute inset-y-12 left-1/2 w-px border-r border-dashed border-zinc-800/50 pointer-events-none" />
+
+        {/* Hardware-Accelerated Channel Motion Stage (Single-File Vertical Stream) */}
         <div className="absolute inset-x-3 top-10 bottom-3 overflow-hidden">
           {dataPackets.map((pkt) => {
-            const slotIndex = pkt.seq % Math.max(config.windowSize, 4);
-            const leftPercent = 10 + slotIndex * (80 / Math.max(config.windowSize, 4));
-
             return (
               <div
                 key={pkt.id}
                 className={cn(
-                  'absolute z-20 cursor-pointer select-none top-0',
+                  'absolute z-20 cursor-pointer select-none top-0 left-1/2',
                   pkt.isLost ? 'pkt-travel-down-lost pointer-events-none' : 'pkt-travel-down',
                 )}
                 style={{
-                  left: `${leftPercent}%`,
                   willChange: 'transform',
                   animationDuration: `${pkt.durationMs}ms`,
                   animationPlayState: playState === 'playing' ? 'running' : 'paused',
@@ -89,7 +92,7 @@ export const ChannelHighway = React.memo(function ChannelHighway({
               >
                 <div
                   className={cn(
-                    'flex items-center gap-1.5 px-2 py-0.5 rounded-xs border text-[10px] font-mono font-bold transition-all shadow-xs hover:border-rose-500',
+                    'flex items-center gap-1.5 px-2.5 py-0.5 rounded-xs border text-[10px] font-mono font-bold transition-all shadow-xs hover:border-rose-500 whitespace-nowrap',
                     pkt.isLost
                       ? 'bg-[#881337] border-[#be123c] text-[#fb7185]'
                       : pkt.isRetransmission
@@ -123,25 +126,24 @@ export const ChannelHighway = React.memo(function ChannelHighway({
             <span>Inbound (ACKs ↑)</span>
           </div>
           <span className="text-[9px] font-mono text-zinc-500">
-            {ackPackets.length} in flight
+            {activeAckInFlight} in flight
           </span>
         </div>
 
-        {/* Hardware-Accelerated Channel Motion Stage */}
+        {/* Central trajectory guide line */}
+        <div className="absolute inset-y-12 left-1/2 w-px border-r border-dashed border-zinc-800/50 pointer-events-none" />
+
+        {/* Hardware-Accelerated Channel Motion Stage (Single-File Vertical Stream) */}
         <div className="absolute inset-x-3 top-10 bottom-3 overflow-hidden">
           {ackPackets.map((ack) => {
-            const slotIndex = ack.seq % Math.max(config.windowSize, 4);
-            const leftPercent = 10 + slotIndex * (80 / Math.max(config.windowSize, 4));
-
             return (
               <div
                 key={ack.id}
                 className={cn(
-                  'absolute z-20 cursor-pointer select-none top-0',
+                  'absolute z-20 cursor-pointer select-none top-0 left-1/2',
                   ack.isLost ? 'ack-travel-up-lost pointer-events-none' : 'ack-travel-up',
                 )}
                 style={{
-                  left: `${leftPercent}%`,
                   willChange: 'transform',
                   animationDuration: `${ack.durationMs}ms`,
                   animationPlayState: playState === 'playing' ? 'running' : 'paused',
@@ -151,7 +153,7 @@ export const ChannelHighway = React.memo(function ChannelHighway({
               >
                 <div
                   className={cn(
-                    'flex items-center gap-1.5 px-2 py-0.5 rounded-xs border text-[10px] font-mono font-bold transition-all shadow-xs hover:border-rose-500',
+                    'flex items-center gap-1.5 px-2.5 py-0.5 rounded-xs border text-[10px] font-mono font-bold transition-all shadow-xs hover:border-rose-500 whitespace-nowrap',
                     ack.isLost
                       ? 'bg-[#881337] border-[#be123c] text-[#fb7185]'
                       : 'bg-[#064e3b] border-[#10b981] text-[#ecfdf5]',
