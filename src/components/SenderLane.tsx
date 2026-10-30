@@ -13,8 +13,23 @@ const GAP = 6;
 const STEP = BOX_WIDTH + GAP; // 44px
 
 export const SenderLane = React.memo(function SenderLane({ state, config }: SenderLaneProps) {
-  const windowWidth = config.windowSize * STEP - GAP;
   const isGbn = config.protocol === 'gbn';
+  const isAllDelivered = state.senderBase >= config.totalPackets;
+
+  // Clamp right edge so window bracket never exceeds the last packet badge index (totalPackets - 1)
+  const startIndex = Math.min(state.senderBase, config.totalPackets - 1);
+  const endIndex = Math.min(state.senderBase + config.windowSize - 1, config.totalPackets - 1);
+  const slotsInWindow = Math.max(1, endIndex - startIndex + 1);
+
+  // Position and width:
+  // When all delivered, wrap the final window inside buffer rail with celebration tag
+  const displayBase = isAllDelivered
+    ? Math.max(0, config.totalPackets - config.windowSize)
+    : startIndex;
+  const bracketWidth = isAllDelivered
+    ? Math.min(config.totalPackets, config.windowSize) * STEP - GAP
+    : slotsInWindow * STEP - GAP;
+  const bracketX = displayBase * STEP;
 
   return (
     <div className="bg-[#09090b] border-b border-[#27272a] px-4 py-2.5 flex-shrink-0 select-none">
@@ -58,20 +73,33 @@ export const SenderLane = React.memo(function SenderLane({ state, config }: Send
             height: `${BOX_HEIGHT + 14}px`,
           }}
         >
-          {/* FLOATING ACTIVE WINDOW BRACKET */}
+          {/* FLOATING ACTIVE WINDOW BRACKET (CLAMPED TO BUFFER LIMITS) */}
           <div
-            className="absolute top-2 rounded-xs border-2 border-[#3b82f6] pointer-events-none z-10 transition-transform"
+            className={cn(
+              'absolute top-2 rounded-xs pointer-events-none z-10 transition-transform',
+              isAllDelivered
+                ? 'border-2 border-[#10b981] bg-[#10b981]/10'
+                : 'border-2 border-[#3b82f6] bg-[#3b82f6]/[0.08]',
+            )}
             style={{
-              width: `${windowWidth}px`,
+              width: `${bracketWidth}px`,
               height: `${BOX_HEIGHT}px`,
-              transform: `translateX(${state.senderBase * STEP}px)`,
-              transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
-              backgroundColor: 'rgba(59, 130, 246, 0.08)',
+              transform: `translateX(${bracketX}px)`,
+              transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), width 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
             }}
           >
             {/* Sliding Bracket Tag */}
-            <div className="absolute -top-3 left-0 text-[8px] font-mono font-bold text-[#3b82f6] whitespace-nowrap bg-[#09090b] px-1 rounded-xs border border-[#3b82f6]/40">
-              WINDOW [{state.senderBase} .. {Math.min(state.senderBase + config.windowSize - 1, config.totalPackets - 1)}]
+            <div
+              className={cn(
+                'absolute -top-3 left-0 text-[8px] font-mono font-bold whitespace-nowrap bg-[#09090b] px-1 rounded-xs border',
+                isAllDelivered
+                  ? 'text-[#10b981] border-[#10b981]/50'
+                  : 'text-[#3b82f6] border-[#3b82f6]/40',
+              )}
+            >
+              {isAllDelivered
+                ? '[ ALL DELIVERED ]'
+                : `WINDOW [${startIndex} .. ${endIndex}]`}
             </div>
           </div>
 

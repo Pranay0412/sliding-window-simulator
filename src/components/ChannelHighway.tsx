@@ -75,18 +75,24 @@ export const ChannelHighway = React.memo(function ChannelHighway({
         {/* Hardware-Accelerated Channel Motion Stage (Single-File Vertical Stream) */}
         <div className="absolute inset-x-3 top-10 bottom-3 overflow-hidden">
           {dataPackets.map((pkt) => {
+            const lateralShift = ((pkt.seq % 3) - 1) * 20;
+            // Earlier dispatched frame leads in front: higher zIndex for leading packets
+            const zIndex = 30 + Math.max(0, 100 - (pkt.seq % 100));
+
             return (
               <div
                 key={pkt.id}
                 className={cn(
-                  'absolute z-20 cursor-pointer select-none top-0 left-1/2',
+                  'absolute cursor-pointer select-none top-0 left-1/2',
                   pkt.isLost ? 'pkt-travel-down-lost pointer-events-none' : 'pkt-travel-down',
                 )}
                 style={{
+                  '--pkt-x': `${lateralShift}px`,
+                  zIndex,
                   willChange: 'transform',
                   animationDuration: `${pkt.durationMs}ms`,
                   animationPlayState: playState === 'playing' ? 'running' : 'paused',
-                }}
+                } as React.CSSProperties}
                 onClick={() => onDropPacket(pkt.id)}
                 title="Click chip to drop this frame in transit"
               >
@@ -136,18 +142,23 @@ export const ChannelHighway = React.memo(function ChannelHighway({
         {/* Hardware-Accelerated Channel Motion Stage (Single-File Vertical Stream) */}
         <div className="absolute inset-x-3 top-10 bottom-3 overflow-hidden">
           {ackPackets.map((ack) => {
+            const lateralShift = ((ack.seq % 3) - 1) * 16;
+            const zIndex = 30 + Math.max(0, 100 - (ack.seq % 100));
+
             return (
               <div
                 key={ack.id}
                 className={cn(
-                  'absolute z-20 cursor-pointer select-none top-0 left-1/2',
+                  'absolute cursor-pointer select-none top-0 left-1/2',
                   ack.isLost ? 'ack-travel-up-lost pointer-events-none' : 'ack-travel-up',
                 )}
                 style={{
+                  '--ack-x': `${lateralShift}px`,
+                  zIndex,
                   willChange: 'transform',
                   animationDuration: `${ack.durationMs}ms`,
                   animationPlayState: playState === 'playing' ? 'running' : 'paused',
-                }}
+                } as React.CSSProperties}
                 onClick={() => onDropPacket(ack.id)}
                 title="Click chip to drop this ACK in transit"
               >

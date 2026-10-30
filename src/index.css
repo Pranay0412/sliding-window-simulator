@@ -55,7 +55,7 @@ input[type="range"] {
 /* Hardware-Accelerated Channel Motion Keyframes (Decoupled from React Renders) */
 @keyframes travelDown {
   0% {
-    transform: translate(-50%, 0);
+    transform: translate(calc(-50% + var(--pkt-x, 0px)), 0);
     opacity: 0;
   }
   8% {
@@ -65,36 +65,36 @@ input[type="range"] {
     opacity: 1;
   }
   100% {
-    transform: translate(-50%, var(--travel-distance, 180px));
+    transform: translate(calc(-50% + var(--pkt-x, 0px)), var(--travel-distance, 180px));
     opacity: 0.95;
   }
 }
 
 @keyframes travelDownLost {
   0% {
-    transform: translate(-50%, 0);
+    transform: translate(calc(-50% + var(--pkt-x, 0px)), 0);
     opacity: 0;
   }
   10% {
     opacity: 1;
   }
   45% {
-    transform: translate(-50%, calc(var(--travel-distance, 180px) * 0.48));
+    transform: translate(calc(-50% + var(--pkt-x, 0px)), calc(var(--travel-distance, 180px) * 0.48));
     opacity: 1;
   }
   75% {
-    transform: translate(-50%, calc(var(--travel-distance, 180px) * 0.52));
+    transform: translate(calc(-50% + var(--pkt-x, 0px)), calc(var(--travel-distance, 180px) * 0.52));
     opacity: 1;
   }
   100% {
-    transform: translate(-50%, calc(var(--travel-distance, 180px) * 0.54));
+    transform: translate(calc(-50% + var(--pkt-x, 0px)), calc(var(--travel-distance, 180px) * 0.54));
     opacity: 0;
   }
 }
 
 @keyframes travelUp {
   0% {
-    transform: translate(-50%, var(--travel-distance, 180px));
+    transform: translate(calc(-50% + var(--ack-x, 0px)), var(--travel-distance, 180px));
     opacity: 0;
   }
   8% {
@@ -104,29 +104,29 @@ input[type="range"] {
     opacity: 1;
   }
   100% {
-    transform: translate(-50%, 0);
+    transform: translate(calc(-50% + var(--ack-x, 0px)), 0);
     opacity: 0.95;
   }
 }
 
 @keyframes travelUpLost {
   0% {
-    transform: translate(-50%, var(--travel-distance, 180px));
+    transform: translate(calc(-50% + var(--ack-x, 0px)), var(--travel-distance, 180px));
     opacity: 0;
   }
   10% {
     opacity: 1;
   }
   45% {
-    transform: translate(-50%, calc(var(--travel-distance, 180px) * 0.52));
+    transform: translate(calc(-50% + var(--ack-x, 0px)), calc(var(--travel-distance, 180px) * 0.52));
     opacity: 1;
   }
   75% {
-    transform: translate(-50%, calc(var(--travel-distance, 180px) * 0.48));
+    transform: translate(calc(-50% + var(--ack-x, 0px)), calc(var(--travel-distance, 180px) * 0.48));
     opacity: 1;
   }
   100% {
-    transform: translate(-50%, calc(var(--travel-distance, 180px) * 0.46));
+    transform: translate(calc(-50% + var(--ack-x, 0px)), calc(var(--travel-distance, 180px) * 0.46));
     opacity: 0;
   }
 }
