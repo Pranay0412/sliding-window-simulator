@@ -21,7 +21,7 @@ export function useSimulator() {
   const pendingDropAckRef = useRef<boolean>(false);
 
   // Active timers tracking
-  const activeTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const activeTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const gbnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const srTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -32,16 +32,16 @@ export function useSimulator() {
 
   function safeSetTimeout(callback: () => void, ms: number): ReturnType<typeof setTimeout> {
     const timer = setTimeout(() => {
-      activeTimersRef.current.delete(timer);
+      activeTimeoutsRef.current.delete(timer);
       callback();
     }, ms);
-    activeTimersRef.current.add(timer);
+    activeTimeoutsRef.current.add(timer);
     return timer;
   }
 
   function clearAllTimers() {
-    activeTimersRef.current.forEach((t) => clearTimeout(t));
-    activeTimersRef.current.clear();
+    activeTimeoutsRef.current.forEach((t) => clearTimeout(t));
+    activeTimeoutsRef.current.clear();
 
     if (gbnTimerRef.current !== null) {
       clearTimeout(gbnTimerRef.current);
@@ -69,7 +69,44 @@ export function useSimulator() {
     }
   }
 
-  // --- DISPATCH FRAME ---
+  // --- SENDER TIMERS ---
+  const startGbnTimer = useCallback(() => {
+    if (gbnTimerRef.current !== null) {
+      clearTimeout(gbnTimerRef.current);
+      gbnTimerRef.current = null;
+    }
+    const timeoutMs = (configRef.current.timeoutDuration * 1000) / configRef.current.animationSpeed;
+    gbnTimerRef.current = setTimeout(() => {
+      onGbnTimeout();
+    }, timeoutMs);
+  }, []);
+
+  const stopGbnTimer = useCallback(() => {
+    if (gbnTimerRef.current !== null) {
+      clearTimeout(gbnTimerRef.current);
+      gbnTimerRef.current = null;
+    }
+  }, []);
+
+  const startSrTimer = useCallback((seq: number) => {
+    if (srTimersRef.current.has(seq)) {
+      clearTimeout(srTimersRef.current.get(seq)!);
+    }
+    const timeoutMs = (configRef.current.timeoutDuration * 1000) / configRef.current.animationSpeed;
+    const timer = setTimeout(() => {
+      onSrTimeout(seq);
+    }, timeoutMs);
+    srTimersRef.current.set(seq, timer);
+  }, []);
+
+  const stopSrTimer = useCallback((seq: number) => {
+    if (srTimersRef.current.has(seq)) {
+      clearTimeout(srTimersRef.current.get(seq)!);
+      srTimersRef.current.delete(seq);
+    }
+  }, []);
+
+  // --- DISPATCH FRAME (OUTBOUND LANE ↓) ---
   const dispatchFrame = useCallback((seq: number, isRetransmission = false) => {
     const s = { ...stateRef.current };
     const cfg = configRef.current;
@@ -98,10 +135,10 @@ export function useSimulator() {
 
     const slot = s.senderSlots.get(seq);
     if (slot) {
-      slot.status = isLost ? 'dropped' : 'in-flight';
+      slot.status = 'in-flight';
+      slot.timeoutFlashUntil = null;
       if (cfg.protocol === 'sr') {
         slot.timerStart = Date.now();
-        // Start SR independent timer
         startSrTimer(seq);
       }
     }
@@ -115,109 +152,48 @@ export function useSimulator() {
       s.totalRetransmissions += 1;
     }
 
-    if (isLost) {
-      appendLog(s, 'DROP', `Frame #${seq} dispatched (fault injected: lost in transit)`);
-    } else {
-      appendLog(s, isRetransmission ? 'RETX' : 'TX', isRetransmission ? `Retransmitting Frame #${seq} → Receiver` : `Dispatched Frame #${seq} → Receiver`);
-    }
-
-    // Go-Back-N: single timer started for the oldest unacknowledged frame
+    // Go-Back-N: single timer for the oldest unacknowledged frame
     if (cfg.protocol === 'gbn' && s.gbnTimerStart === null) {
       s.gbnTimerStart = Date.now();
       startGbnTimer();
     }
 
+    if (isLost) {
+      appendLog(s, 'DROP', `Frame #${seq} dispatched (fault injected: lost in transit ✕)`);
+    } else {
+      appendLog(
+        s,
+        isRetransmission ? 'RETX' : 'TX',
+        isRetransmission ? `Retransmitting Frame #${seq} → Receiver` : `Dispatched Frame #${seq} → Receiver`,
+      );
+    }
+
     stateRef.current = s;
     setState(s);
-
-    // Schedule arrival at receiver after hardware transit duration
-    safeSetTimeout(() => {
-      onFrameArrival(pkt.id, seq, isLost);
-    }, durationMs);
-  }, []);
-
-  // --- RECEIVER: FRAME ARRIVAL ---
-  const onFrameArrival = useCallback((packetId: string, seq: number, isLost: boolean) => {
-    const s = { ...stateRef.current };
-    const cfg = configRef.current;
-
-    // Clean up packet from channel
-    s.activePackets = s.activePackets.filter((p) => p.id !== packetId);
 
     if (isLost) {
-      appendLog(s, 'DROP', `Frame #${seq} dropped in physical channel ✕`);
-      stateRef.current = s;
-      setState(s);
-      return;
-    }
-
-    if (cfg.protocol === 'gbn') {
-      if (seq === s.receiverBase) {
-        // In-order frame received
-        s.receiverSlots.set(seq, { seq, state: 'delivered' });
-        s.receiverBase += 1;
-        s.totalDelivered += 1;
-        appendLog(s, 'DELIVER', `Frame #${seq} accepted in-order → Delivered`);
-
-        // Send Cumulative ACK
-        dispatchAck(seq, true);
-      } else {
-        // Out-of-order frame: DISCARD
-        appendLog(s, 'RX', `Frame #${seq} DISCARDED (expected #${s.receiverBase})`);
-        if (s.receiverBase > 0) {
-          dispatchAck(s.receiverBase - 1, true);
+      // Travels halfway, flashes [LOST], and dissolves without reaching receiver
+      safeSetTimeout(() => {
+        const cur = { ...stateRef.current };
+        cur.activePackets = cur.activePackets.filter((p) => p.id !== pkt.id);
+        const curSlot = cur.senderSlots.get(seq);
+        if (curSlot && curSlot.status !== 'acked') {
+          curSlot.status = 'dropped';
         }
-      }
+        appendLog(cur, 'DROP', `Frame #${seq} dropped in forward channel ✕`);
+        stateRef.current = cur;
+        setState(cur);
+      }, Math.round(durationMs * 0.65));
     } else {
-      // Selective Repeat (SR)
-      const windowEnd = s.receiverBase + cfg.windowSize;
-      if (seq >= s.receiverBase && seq < windowEnd) {
-        // Send individual ACK
-        dispatchAck(seq, false);
-
-        const slot = s.receiverSlots.get(seq);
-        const alreadyGot = slot && (slot.state === 'delivered' || slot.state === 'buffered');
-
-        if (!alreadyGot) {
-          if (seq === s.receiverBase) {
-            // Base arrived: deliver base and contiguous buffered
-            s.receiverSlots.set(seq, { seq, state: 'delivered' });
-            s.totalDelivered += 1;
-            appendLog(s, 'DELIVER', `Frame #${seq} delivered to Application Layer`);
-
-            let next = s.receiverBase + 1;
-            while (next < cfg.totalPackets) {
-              const b = s.receiverSlots.get(next);
-              if (b && b.state === 'buffered') {
-                b.state = 'delivered';
-                s.totalDelivered += 1;
-                appendLog(s, 'DELIVER', `Buffered Frame #${next} contiguously delivered`);
-                next++;
-              } else {
-                break;
-              }
-            }
-            s.receiverBase = next;
-            appendLog(s, 'SLIDE', `Receiver window slid to #${next}`);
-          } else {
-            // Buffer out-of-order
-            s.receiverSlots.set(seq, { seq, state: 'buffered' });
-            appendLog(s, 'BUFFER', `Frame #${seq} buffered out-of-order in receive window`);
-          }
-        }
-      } else if (seq >= Math.max(0, s.receiverBase - cfg.windowSize) && seq < s.receiverBase) {
-        // Re-ACK previously delivered frame
-        dispatchAck(seq, false);
-      }
+      // Normal delivery to receiver at bottom
+      safeSetTimeout(() => {
+        onFrameArrival(pkt.id, seq);
+      }, durationMs);
     }
+  }, [startGbnTimer, startSrTimer]);
 
-    stateRef.current = s;
-    setState(s);
-  }, []);
-
-  // --- DISPATCH ACK ---
-  const dispatchAck = useCallback((ackNum: number, isCumulative: boolean) => {
-    const s = { ...stateRef.current };
+  // --- DISPATCH ACK (INBOUND LANE ↑) ---
+  const sendAck = useCallback((ackNum: number, isCumulative: boolean, s: SimState) => {
     const cfg = configRef.current;
 
     // Check fault injection right at ACK formation
@@ -240,75 +216,154 @@ export function useSimulator() {
       durationMs,
     };
 
+    // Add ACK directly to activePackets so it renders traveling UPWARD
     s.activePackets = [...s.activePackets, ackPkt];
 
     if (isLost) {
-      appendLog(s, 'DROP', `${isCumulative ? 'Cumulative' : 'Individual'} ACK #${ackNum} dispatched (fault injected: lost in transit)`);
+      appendLog(s, 'DROP', `${isCumulative ? 'Cumulative' : 'Individual'} ACK #${ackNum} dispatched (fault injected: will drop in transit ✕)`);
+      // Travels halfway up, flashes [ACK LOST], and dissolves without reaching sender
+      safeSetTimeout(() => {
+        const cur = { ...stateRef.current };
+        cur.activePackets = cur.activePackets.filter((p) => p.id !== ackPkt.id);
+        appendLog(cur, 'DROP', `ACK #${ackNum} dropped in reverse channel ✕`);
+        stateRef.current = cur;
+        setState(cur);
+      }, Math.round(durationMs * 0.65));
     } else {
       appendLog(s, 'ACK_TX', `${isCumulative ? 'Cumulative' : 'Individual'} ACK #${ackNum} dispatched → Sender`);
+      // Arrives at sender when ACK reaches the top
+      safeSetTimeout(() => {
+        onAckArrival(ackPkt.id, ackNum, isCumulative);
+      }, durationMs);
+    }
+  }, []);
+
+  // --- RECEIVER: FRAME ARRIVAL (BOTTOM) ---
+  const onFrameArrival = useCallback((packetId: string, seq: number) => {
+    const s = { ...stateRef.current };
+    const cfg = configRef.current;
+
+    const pkt = s.activePackets.find((p) => p.id === packetId);
+    if (!pkt || pkt.isLost) return;
+
+    // Remove frame from active packets
+    s.activePackets = s.activePackets.filter((p) => p.id !== packetId);
+
+    if (cfg.protocol === 'gbn') {
+      if (seq === s.receiverBase) {
+        // In-order frame received: deliver & advance receiver window
+        s.receiverSlots.set(seq, { seq, state: 'delivered' });
+        s.receiverBase += 1;
+        s.totalDelivered += 1;
+        appendLog(s, 'DELIVER', `Frame #${seq} accepted in-order → Delivered`);
+
+        // Send Cumulative ACK back to sender
+        sendAck(seq, true, s);
+      } else {
+        // Out-of-order frame: DISCARD and repeat last cumulative ACK
+        appendLog(s, 'RX', `Frame #${seq} DISCARDED (expected #${s.receiverBase})`);
+        if (s.receiverBase > 0) {
+          sendAck(s.receiverBase - 1, true, s);
+        }
+      }
+    } else {
+      // Selective Repeat (SR)
+      const windowEnd = s.receiverBase + cfg.windowSize;
+      if (seq >= s.receiverBase && seq < windowEnd) {
+        // Send individual ACK
+        sendAck(seq, false, s);
+
+        const slot = s.receiverSlots.get(seq);
+        const alreadyGot = slot && (slot.state === 'delivered' || slot.state === 'buffered');
+
+        if (!alreadyGot) {
+          if (seq === s.receiverBase) {
+            // Base arrived: deliver base and contiguous buffered frames
+            s.receiverSlots.set(seq, { seq, state: 'delivered' });
+            s.totalDelivered += 1;
+            appendLog(s, 'DELIVER', `Frame #${seq} delivered to Application Layer`);
+
+            let next = s.receiverBase + 1;
+            while (next < cfg.totalPackets) {
+              const b = s.receiverSlots.get(next);
+              if (b && b.state === 'buffered') {
+                b.state = 'delivered';
+                s.totalDelivered += 1;
+                appendLog(s, 'DELIVER', `Buffered Frame #${next} contiguously delivered`);
+                next++;
+              } else {
+                break;
+              }
+            }
+            s.receiverBase = next;
+            appendLog(s, 'SLIDE', `Receiver window slid to #${next}`);
+          } else {
+            // Buffer out-of-order frame
+            s.receiverSlots.set(seq, { seq, state: 'buffered' });
+            appendLog(s, 'BUFFER', `Frame #${seq} buffered out-of-order in receive window`);
+          }
+        }
+      } else if (seq >= Math.max(0, s.receiverBase - cfg.windowSize) && seq < s.receiverBase) {
+        // Re-ACK previously delivered frame
+        sendAck(seq, false, s);
+      }
     }
 
     stateRef.current = s;
     setState(s);
+  }, [sendAck]);
 
-    safeSetTimeout(() => {
-      onAckArrival(ackPkt.id, ackNum, isLost);
-    }, durationMs);
-  }, []);
-
-  // --- SENDER: ACK ARRIVAL ---
-  const onAckArrival = useCallback((ackId: string, ackNum: number, isLost: boolean) => {
+  // --- SENDER: ACK ARRIVAL (TOP) ---
+  const onAckArrival = useCallback((ackId: string, ackNum: number, _isCumulative: boolean) => {
     const s = { ...stateRef.current };
     const cfg = configRef.current;
 
-    s.activePackets = s.activePackets.filter((p) => p.id !== ackId);
+    const ack = s.activePackets.find((p) => p.id === ackId);
+    if (!ack || ack.isLost) return;
 
-    if (isLost) {
-      appendLog(s, 'DROP', `ACK #${ackNum} dropped in reverse channel ✕`);
-      stateRef.current = s;
-      setState(s);
-      return;
-    }
+    // Remove ACK from active channel
+    s.activePackets = s.activePackets.filter((p) => p.id !== ackId);
 
     if (cfg.protocol === 'gbn') {
       if (ackNum >= s.senderBase) {
         const oldBase = s.senderBase;
         const newBase = ackNum + 1;
 
-        // Confirm frames from oldBase to ackNum
+        // Solid green confirmed for frames [oldBase .. ackNum]
         for (let i = oldBase; i <= ackNum; i++) {
           const slot = s.senderSlots.get(i);
           if (slot) {
             slot.status = 'acked';
             slot.timerStart = null;
+            slot.timeoutFlashUntil = null;
           }
         }
 
         s.senderBase = newBase;
-        appendLog(s, 'ACK_RX', `Cumulative ACK #${ackNum} confirmed frames [${oldBase} .. ${ackNum}]. Window slid to #${newBase}`);
+        appendLog(s, 'ACK_RX', `Cumulative ACK #${ackNum} arrived at sender. Confirmed frames [${oldBase} .. ${ackNum}]. Window slid to #${newBase}`);
 
-        // Timer handling
+        // Timer reset:
         if (newBase >= s.nextSeqNum) {
+          // All dispatched frames confirmed: stop timer
           s.gbnTimerStart = null;
-          if (gbnTimerRef.current !== null) {
-            clearTimeout(gbnTimerRef.current);
-            gbnTimerRef.current = null;
-          }
+          stopGbnTimer();
         } else {
-          // Restart timer for new base
+          // There are still unacknowledged frames in flight: restart timer for new base
           s.gbnTimerStart = Date.now();
           startGbnTimer();
         }
 
-        stateRef.current = s;
-        setState(s);
-
-        // 1-for-1 sliding window: dispatch newly opened window slot(s)
+        // 1-for-1 sliding pipeline dispatch:
+        // As window slides right, dispatch newly opened slots
         const openLimit = Math.min(newBase + cfg.windowSize, cfg.totalPackets);
         const toEmit: number[] = [];
         for (let seq = s.nextSeqNum; seq < openLimit; seq++) {
           toEmit.push(seq);
         }
+        s.nextSeqNum = Math.max(s.nextSeqNum, openLimit);
+
+        stateRef.current = s;
+        setState(s);
 
         toEmit.forEach((seq, idx) => {
           safeSetTimeout(() => {
@@ -320,20 +375,21 @@ export function useSimulator() {
 
         checkCompletion(s);
       } else {
-        appendLog(s, 'ACK_RX', `Duplicate ACK #${ackNum} received (ignored by sender)`);
+        appendLog(s, 'ACK_RX', `Duplicate ACK #${ackNum} arrived (ignored by sender)`);
         stateRef.current = s;
         setState(s);
       }
     } else {
-      // Selective Repeat
+      // Selective Repeat (SR)
       const slot = s.senderSlots.get(ackNum);
       if (slot && slot.status !== 'acked') {
         slot.status = 'acked';
         slot.timerStart = null;
+        slot.timeoutFlashUntil = null;
         stopSrTimer(ackNum);
-        appendLog(s, 'ACK_RX', `Individual ACK #${ackNum} confirmed Frame #${ackNum}`);
+        appendLog(s, 'ACK_RX', `Individual ACK #${ackNum} arrived at sender. Confirmed Frame #${ackNum}`);
 
-        // Slide window if ackNum is senderBase
+        // Slide window forward past contiguous ACKed frames if ackNum === senderBase
         if (ackNum === s.senderBase) {
           let next = s.senderBase;
           while (next < cfg.totalPackets) {
@@ -348,12 +404,16 @@ export function useSimulator() {
           s.senderBase = next;
           appendLog(s, 'SLIDE', `Sender window slid forward by ${distance} slot(s) → Base #${next}`);
 
-          // 1-for-1 dispatch into opened slots
+          // 1-for-1 sliding pipeline dispatch into opened slots
           const openLimit = Math.min(next + cfg.windowSize, cfg.totalPackets);
           const toEmit: number[] = [];
           for (let seq = s.nextSeqNum; seq < openLimit; seq++) {
             toEmit.push(seq);
           }
+          s.nextSeqNum = Math.max(s.nextSeqNum, openLimit);
+
+          stateRef.current = s;
+          setState(s);
 
           toEmit.forEach((seq, idx) => {
             safeSetTimeout(() => {
@@ -362,53 +422,36 @@ export function useSimulator() {
               }
             }, idx * cfg.staggerMs);
           });
+        } else {
+          stateRef.current = s;
+          setState(s);
         }
 
         checkCompletion(s);
+      } else {
         stateRef.current = s;
         setState(s);
       }
     }
-  }, [dispatchAck]);
+  }, [dispatchFrame, startGbnTimer, stopGbnTimer, stopSrTimer]);
 
-  // --- TIMERS ---
-  function startGbnTimer() {
-    if (gbnTimerRef.current !== null) {
-      clearTimeout(gbnTimerRef.current);
-    }
-    const timeoutMs = (configRef.current.timeoutDuration * 1000) / configRef.current.animationSpeed;
-    gbnTimerRef.current = setTimeout(() => {
-      onGbnTimeout();
-    }, timeoutMs);
-  }
-
-  function startSrTimer(seq: number) {
-    if (srTimersRef.current.has(seq)) {
-      clearTimeout(srTimersRef.current.get(seq)!);
-    }
-    const timeoutMs = (configRef.current.timeoutDuration * 1000) / configRef.current.animationSpeed;
-    const timer = setTimeout(() => {
-      onSrTimeout(seq);
-    }, timeoutMs);
-    srTimersRef.current.set(seq, timer);
-  }
-
-  function stopSrTimer(seq: number) {
-    if (srTimersRef.current.has(seq)) {
-      clearTimeout(srTimersRef.current.get(seq)!);
-      srTimersRef.current.delete(seq);
-    }
-  }
-
+  // --- TIMEOUT HANDLERS ---
   const onGbnTimeout = useCallback(() => {
     if (playStateRef.current !== 'playing') return;
     const s = { ...stateRef.current };
     const cfg = configRef.current;
-
     const base = s.senderBase;
-    appendLog(s, 'TIMEOUT', `TIMEOUT on oldest unACKed Frame #${base}! Retransmitting window...`);
 
-    // Retransmit all unacknowledged frames in the window [base .. nextSeqNum - 1]
+    // Flash timeout warning on base frame
+    const baseSlot = s.senderSlots.get(base);
+    if (baseSlot) {
+      baseSlot.status = 'timeout';
+      baseSlot.timeoutFlashUntil = Date.now() + 800;
+    }
+
+    appendLog(s, 'TIMEOUT', `TIMEOUT on oldest unACKed Frame #${base}! Retransmitting window [${base}..${s.nextSeqNum - 1}]...`);
+
+    // Retransmit all unacknowledged frames currently in the window
     const unacked: number[] = [];
     for (let i = base; i < s.nextSeqNum; i++) {
       const slot = s.senderSlots.get(i);
@@ -430,18 +473,24 @@ export function useSimulator() {
     stateRef.current = s;
     setState(s);
     startGbnTimer();
-  }, [dispatchFrame]);
+  }, [dispatchFrame, startGbnTimer]);
 
   const onSrTimeout = useCallback((seq: number) => {
     if (playStateRef.current !== 'playing') return;
     const s = { ...stateRef.current };
+    const slot = s.senderSlots.get(seq);
+    if (slot) {
+      slot.status = 'timeout';
+      slot.timeoutFlashUntil = Date.now() + 800;
+    }
+
     appendLog(s, 'TIMEOUT', `TIMEOUT for Frame #${seq}! Retransmitting selectively...`);
 
     dispatchFrame(seq, true);
     startSrTimer(seq);
-  }, [dispatchFrame]);
+  }, [dispatchFrame, startSrTimer]);
 
-  // --- ACTIONS ---
+  // --- USER ACTIONS ---
   const play = useCallback(() => {
     if (stateRef.current.isComplete) return;
     setPlayState('playing');
@@ -449,7 +498,7 @@ export function useSimulator() {
     const s = { ...stateRef.current };
     const cfg = configRef.current;
 
-    // If starting initial burst from 0
+    // If starting initial burst from sequence 0
     if (s.nextSeqNum === 0) {
       const burstLimit = Math.min(cfg.windowSize, cfg.totalPackets);
       for (let i = 0; i < burstLimit; i++) {
@@ -464,8 +513,15 @@ export function useSimulator() {
       if (cfg.protocol === 'gbn' && s.gbnTimerStart !== null) {
         startGbnTimer();
       }
+      if (cfg.protocol === 'sr') {
+        s.senderSlots.forEach((slot, seq) => {
+          if (slot.status === 'in-flight' && slot.timerStart !== null) {
+            startSrTimer(seq);
+          }
+        });
+      }
     }
-  }, [dispatchFrame]);
+  }, [dispatchFrame, startGbnTimer, startSrTimer]);
 
   const pause = useCallback(() => {
     setPlayState('paused');
@@ -490,7 +546,7 @@ export function useSimulator() {
     const s = stateRef.current;
     const cfg = configRef.current;
 
-    // Dispatch next frame if window allows
+    // Dispatch next frame if window has open slot
     if (s.nextSeqNum < Math.min(s.senderBase + cfg.windowSize, cfg.totalPackets)) {
       dispatchFrame(s.nextSeqNum, false);
     }
@@ -499,18 +555,27 @@ export function useSimulator() {
   const dropInFlight = useCallback((id: string) => {
     const s = { ...stateRef.current };
     const pkt = s.activePackets.find((p) => p.id === id);
-    if (!pkt) return;
+    if (!pkt || pkt.isLost) return;
 
     pkt.isLost = true;
     appendLog(s, 'DROP', `${pkt.type === 'DATA' ? 'Frame' : 'ACK'} #${pkt.seq} killed by operator ✕`);
 
     if (pkt.type === 'DATA') {
       const slot = s.senderSlots.get(pkt.seq);
-      if (slot) slot.status = 'dropped';
+      if (slot && slot.status !== 'acked') {
+        slot.status = 'dropped';
+      }
     }
 
     stateRef.current = s;
     setState(s);
+
+    safeSetTimeout(() => {
+      const cur = { ...stateRef.current };
+      cur.activePackets = cur.activePackets.filter((p) => p.id !== id);
+      stateRef.current = cur;
+      setState(cur);
+    }, 600);
   }, []);
 
   const toggleDropNextFrame = useCallback(() => {

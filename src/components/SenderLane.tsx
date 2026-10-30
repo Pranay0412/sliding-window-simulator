@@ -81,15 +81,22 @@ export const SenderLane = React.memo(function SenderLane({ state, config }: Send
               const slot = state.senderSlots.get(i);
               const status: FrameStatus = slot?.status ?? 'unsent';
               const isBase = i === state.senderBase;
+              const isTimeout = status === 'timeout' || (slot?.timeoutFlashUntil !== null && (slot?.timeoutFlashUntil ?? 0) > Date.now());
 
               let style = 'bg-[#18181b] border-[#27272a] text-[#71717a]';
-              if (status === 'acked') {
+              if (isTimeout) {
+                style = 'bg-[#881337] border-[#f59e0b] text-[#fbbf24] animate-pulse';
+              } else if (status === 'acked') {
                 style = 'bg-[#065f46] border-[#059669] text-[#34d399]';
               } else if (status === 'in-flight') {
                 style = 'bg-[#0c4a6e]/40 border-[#38bdf8] text-[#38bdf8]';
               } else if (status === 'dropped') {
                 style = 'bg-[#881337]/40 border-[#be123c] text-[#fb7185]';
               }
+
+              const timeoutMs = Math.round((config.timeoutDuration * 1000) / config.animationSpeed);
+              const showGbnTimer = isGbn && isBase && state.gbnTimerStart !== null && status !== 'acked';
+              const showSrTimer = !isGbn && status === 'in-flight' && slot?.timerStart !== null;
 
               return (
                 <div
@@ -108,15 +115,18 @@ export const SenderLane = React.memo(function SenderLane({ state, config }: Send
                   </div>
 
                   <div className="text-[7px] font-mono uppercase tracking-tight truncate">
-                    {status === 'acked' ? 'ACK' : status === 'in-flight' ? 'SENT' : status === 'dropped' ? 'LOST' : 'WAIT'}
+                    {isTimeout ? 'TIMEOUT' : status === 'acked' ? 'ACK' : status === 'in-flight' ? 'SENT' : status === 'dropped' ? 'LOST' : 'WAIT'}
                   </div>
 
-                  {/* Embedded micro-timer countdown bar */}
-                  {((isGbn && isBase && status === 'in-flight') || (!isGbn && status === 'in-flight')) && (
-                    <div className="absolute inset-x-0 bottom-0 h-[2px] bg-black/40 overflow-hidden">
+                  {/* Embedded micro-timer countdown bar (drains 100% -> 0% over timeout) */}
+                  {(showGbnTimer || showSrTimer) && (
+                    <div className="absolute inset-x-0 bottom-0 h-[2.5px] bg-black/50 overflow-hidden">
                       <div
-                        className="h-full bg-[#f59e0b] animate-pulse"
-                        style={{ width: '100%' }}
+                        key={`timer-drain-${i}-${isGbn ? state.gbnTimerStart : slot?.timerStart}`}
+                        className="h-full bg-[#f59e0b] timer-bar-drain"
+                        style={{
+                          animationDuration: `${timeoutMs}ms`,
+                        }}
                       />
                     </div>
                   )}

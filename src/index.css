@@ -61,12 +61,34 @@ input[type="range"] {
   8% {
     opacity: 1;
   }
-  92% {
+  90% {
     opacity: 1;
   }
   100% {
     transform: translateY(var(--travel-distance, 200px));
-    opacity: 0.85;
+    opacity: 0.95;
+  }
+}
+
+@keyframes travelDownLost {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  45% {
+    transform: translateY(calc(var(--travel-distance, 200px) * 0.48));
+    opacity: 1;
+  }
+  75% {
+    transform: translateY(calc(var(--travel-distance, 200px) * 0.52));
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(calc(var(--travel-distance, 200px) * 0.54));
+    opacity: 0;
   }
 }
 
@@ -78,12 +100,43 @@ input[type="range"] {
   8% {
     opacity: 1;
   }
-  92% {
+  90% {
     opacity: 1;
   }
   100% {
     transform: translateY(0);
-    opacity: 0.85;
+    opacity: 0.95;
+  }
+}
+
+@keyframes travelUpLost {
+  0% {
+    transform: translateY(var(--travel-distance, 200px));
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  45% {
+    transform: translateY(calc(var(--travel-distance, 200px) * 0.52));
+    opacity: 1;
+  }
+  75% {
+    transform: translateY(calc(var(--travel-distance, 200px) * 0.48));
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(calc(var(--travel-distance, 200px) * 0.46));
+    opacity: 0;
+  }
+}
+
+@keyframes drainBar {
+  0% {
+    width: 100%;
+  }
+  100% {
+    width: 0%;
   }
 }
 
@@ -94,9 +147,29 @@ input[type="range"] {
   animation-fill-mode: forwards;
 }
 
+.pkt-travel-down-lost {
+  will-change: transform;
+  animation-name: travelDownLost;
+  animation-timing-function: ease-out;
+  animation-fill-mode: forwards;
+}
+
 .ack-travel-up {
   will-change: transform;
   animation-name: travelUp;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.ack-travel-up-lost {
+  will-change: transform;
+  animation-name: travelUpLost;
+  animation-timing-function: ease-out;
+  animation-fill-mode: forwards;
+}
+
+.timer-bar-drain {
+  animation-name: drainBar;
   animation-timing-function: linear;
   animation-fill-mode: forwards;
 }

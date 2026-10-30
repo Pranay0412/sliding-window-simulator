@@ -25,7 +25,7 @@ export const ChannelHighway = React.memo(function ChannelHighway({
     function updateDistance() {
       if (containerRef.current) {
         const h = containerRef.current.clientHeight;
-        setLaneDistance(Math.max(140, h - 36));
+        setLaneDistance(Math.max(120, h - 78));
       }
     }
     updateDistance();
@@ -69,16 +69,14 @@ export const ChannelHighway = React.memo(function ChannelHighway({
         <div className="absolute inset-x-3 top-10 bottom-3 overflow-hidden">
           {dataPackets.map((pkt) => {
             const slotIndex = pkt.seq % Math.max(config.windowSize, 4);
-            const leftPercent = 12 + slotIndex * (76 / Math.max(config.windowSize, 4));
+            const leftPercent = 10 + slotIndex * (80 / Math.max(config.windowSize, 4));
 
             return (
               <div
                 key={pkt.id}
                 className={cn(
-                  'absolute z-20 cursor-pointer select-none',
-                  pkt.isLost
-                    ? 'scale-90 opacity-0 transition-all duration-300 pointer-events-none'
-                    : 'pkt-travel-down',
+                  'absolute z-20 cursor-pointer select-none top-0',
+                  pkt.isLost ? 'pkt-travel-down-lost pointer-events-none' : 'pkt-travel-down',
                 )}
                 style={{
                   left: `${leftPercent}%`,
@@ -91,20 +89,24 @@ export const ChannelHighway = React.memo(function ChannelHighway({
               >
                 <div
                   className={cn(
-                    'flex items-center gap-1 px-2 py-0.5 rounded-xs border text-[10px] font-mono font-bold transition-all shadow-xs hover:border-rose-500',
+                    'flex items-center gap-1.5 px-2 py-0.5 rounded-xs border text-[10px] font-mono font-bold transition-all shadow-xs hover:border-rose-500',
                     pkt.isLost
-                      ? 'bg-[#881337] border-[#be123c] text-[#fb7185] line-through'
+                      ? 'bg-[#881337] border-[#be123c] text-[#fb7185]'
                       : pkt.isRetransmission
                         ? 'bg-[#451a03] border-[#d97706] text-[#fbbf24]'
                         : 'bg-[#0c4a6e] border-[#38bdf8] text-[#e0f2fe]',
                   )}
                 >
-                  <span>PKT {pkt.seq}</span>
-                  {pkt.isRetransmission && !pkt.isLost && (
-                    <span className="text-[7px] bg-[#78350f] text-amber-200 px-0.5 rounded-xs">
-                      R
+                  <span>PKT #{pkt.seq}</span>
+                  {pkt.isLost ? (
+                    <span className="text-[7px] bg-[#4c0519] text-rose-300 px-1 rounded-2xs border border-rose-800 uppercase font-semibold">
+                      LOST
                     </span>
-                  )}
+                  ) : pkt.isRetransmission ? (
+                    <span className="text-[7px] bg-[#78350f] text-amber-200 px-1 rounded-2xs border border-amber-700 uppercase font-semibold">
+                      RETX
+                    </span>
+                  ) : null}
                 </div>
               </div>
             );
@@ -129,16 +131,14 @@ export const ChannelHighway = React.memo(function ChannelHighway({
         <div className="absolute inset-x-3 top-10 bottom-3 overflow-hidden">
           {ackPackets.map((ack) => {
             const slotIndex = ack.seq % Math.max(config.windowSize, 4);
-            const leftPercent = 12 + slotIndex * (76 / Math.max(config.windowSize, 4));
+            const leftPercent = 10 + slotIndex * (80 / Math.max(config.windowSize, 4));
 
             return (
               <div
                 key={ack.id}
                 className={cn(
-                  'absolute z-20 cursor-pointer select-none',
-                  ack.isLost
-                    ? 'scale-90 opacity-0 transition-all duration-300 pointer-events-none'
-                    : 'ack-travel-up',
+                  'absolute z-20 cursor-pointer select-none top-0',
+                  ack.isLost ? 'ack-travel-up-lost pointer-events-none' : 'ack-travel-up',
                 )}
                 style={{
                   left: `${leftPercent}%`,
@@ -151,16 +151,22 @@ export const ChannelHighway = React.memo(function ChannelHighway({
               >
                 <div
                   className={cn(
-                    'flex items-center gap-1 px-2 py-0.5 rounded-xs border text-[10px] font-mono font-bold transition-all shadow-xs hover:border-rose-500',
+                    'flex items-center gap-1.5 px-2 py-0.5 rounded-xs border text-[10px] font-mono font-bold transition-all shadow-xs hover:border-rose-500',
                     ack.isLost
-                      ? 'bg-[#881337] border-[#be123c] text-[#fb7185] line-through'
-                      : 'bg-[#064e3b] border-[#059669] text-[#a7f3d0]',
+                      ? 'bg-[#881337] border-[#be123c] text-[#fb7185]'
+                      : 'bg-[#064e3b] border-[#10b981] text-[#ecfdf5]',
                   )}
                 >
-                  <span>ACK {ack.seq}</span>
-                  <span className="text-[7px] text-zinc-400 font-normal uppercase">
-                    {ack.isCumulative ? 'C' : 'S'}
-                  </span>
+                  <span>ACK #{ack.seq}</span>
+                  {ack.isLost ? (
+                    <span className="text-[7px] bg-[#4c0519] text-rose-300 px-1 rounded-2xs border border-rose-800 uppercase font-semibold">
+                      ACK LOST
+                    </span>
+                  ) : (
+                    <span className="text-[7px] bg-[#022c22] text-emerald-400 px-1 rounded-2xs border border-emerald-800/80 uppercase">
+                      {ack.isCumulative ? 'CUM' : 'IND'}
+                    </span>
+                  )}
                 </div>
               </div>
             );
