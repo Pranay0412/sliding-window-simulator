@@ -1,32 +1,38 @@
-# React + TypeScript + Vite
+# Sliding Window Protocol Simulator (Go-Back-N & Selective Repeat)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+An interactive, high-performance network protocol engineering console built with React, TypeScript, and Tailwind CSS. Designed after standard academic simulation models (TU Berlin / Johannes Kessler), this visualizer accurately simulates Data Link and Transport Layer sliding window flow control mechanics, pipeline dynamics, cumulative vs. selective acknowledgments, and fault recovery.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## ⚡ Key Highlights & Mechanics
 
-## React Compiler
+- **Go-Back-N (GBN) State Engine:**
+  - Strict in-order receiver processing ($W_r = 1$) with discard of out-of-order frames.
+  - Cumulative acknowledgments ($ACK\ k$ confirms all frames through $k$).
+  - Single-window base timer ($S_{\text{base}}$) countdown visualization embedded directly inside frame badges.
+  - Complete window $[S_{\text{base}} \dots S_{\text{base}} + N - 1]$ retransmission upon timeout.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Selective Repeat (SR) State Engine:**
+  - Independent sender window ($W_s = N$) and receiver buffer window ($W_r = N$).
+  - Receiver-side out-of-order frame buffering and atomic contiguous delivery upon arrival of base frames.
+  - Individual packet-level timers and isolated retransmissions for lost segments only.
 
-## Expanding the Oxlint configuration
+- **Interactive Channel Highway & Fault Injection:**
+  - Bidirectional visual highway: outbound data frames traveling downward and inbound ACKs propagating upward.
+  - On-demand runtime fault injection: drop next data frame, drop next ACK, or hover-to-kill active in-flight packets.
+  - Hardware-accelerated CSS translation transitions maintaining a stable 60 FPS without React render cycle lag.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+- **Diagnostic Telemetry HUD:**
+  - Real-time protocol metrics: Total Packets Sent, Delivered, Retransmission Count, and Network Efficiency ($\frac{\text{Delivered}}{\text{Sent}} \times 100$).
+  - Color-coded, auto-scrolling monospace event log stream tracking transmission, delivery, drops, and timeouts.
+  - Fine-grained controls: variable window size ($N \in [2, 8]$), inter-packet speed ($0.5\times, 1\times, 2\times$), timeout intervals, and step-by-step tick execution for viva demonstrations.
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
+---
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## 🛠️ Tech Stack & Standards
+
+- **Frontend & Visuals:** React 18, TypeScript (Strict Mode), Vite, Tailwind CSS
+- **Design Aesthetic:** Industrial dark-mode engineering console (`zinc-950`), custom SVG countdown meters, monospace data grids
+- **Academic Deliverables:** 
+  - Complete standalone reference simulator in ANSI C (`gbn_sr.c`)
+  - Formal protocol proofs ($W < 2^k$ for GBN, $W_s + W_r \le 2^k$ for SR) and state machine specifications (`PROJECT_ARCHITECTURE.md`)
