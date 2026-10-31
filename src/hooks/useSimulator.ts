@@ -473,10 +473,9 @@ export function useSimulator() {
     if (playStateRef.current !== 'playing') return;
     const s = { ...stateRef.current };
     const cfg = configRef.current;
-
     if (s.isComplete || s.senderBase >= cfg.totalPackets) return;
-    const base = s.senderBase;
 
+    const base = s.senderBase;
     gbnDropAckBurstRef.current = false;
     s.pendingDropAck = false;
 
@@ -489,16 +488,27 @@ export function useSimulator() {
     appendLog(
       s,
       'TIMEOUT',
-      `TIMEOUT on oldest unACKed Frame #${base}! Retransmitting window [${base}..${Math.max(base, s.nextSeqNum - 1)}]...`
+      `TIMEOUT on oldest unACKed Frame #${base}! Retransmitting window [${base}..${Math.min(s.nextSeqNum - 1, base + cfg.windowSize - 1)}]...`
     );
 
     const unacked: number[] = [];
-    for (let i = base; i < s.nextSeqNum; i++) {
+    const windowEnd = Math.min(s.nextSeqNum, base + cfg.windowSize);
+    for (let i = base; i < windowEnd; i++) {
       const slot = s.senderSlots.get(i);
       if (slot && slot.status !== 'acked') {
         unacked.push(i);
       }
     }
+
+    if (gbnTimerRef.current !== null) {
+      clearTimeout(gbnTimerRef.current);
+      gbnTimerRef.current = null;
+    }
+
+    s.gbnTimerStart = null;
+
+    stateRef.current = s;
+    setState(s);
 
     const staggerGap = Math.round(220 / cfg.animationSpeed);
     unacked.forEach((seq, idx) => {
@@ -508,32 +518,29 @@ export function useSimulator() {
         }
       }, idx * staggerGap);
     });
+  }, [dispatchFrame]); 
 
-    s.gbnTimerStart = Date.now();
-    stateRef.current = s;
-    setState(s);
-    startGbnTimer();
-  }, [dispatchFrame, startGbnTimer]);
 
   const onSrTimeout = useCallback((seq: number) => {
     if (playStateRef.current !== 'playing') return;
     const s = { ...stateRef.current };
     const cfg = configRef.current;
-
     if (s.isComplete || s.senderBase >= cfg.totalPackets) return;
 
     const slot = s.senderSlots.get(seq);
-    if (slot && slot.status !== 'acked') {
+    if (slot && slot.status !== 'acked' && seq >= s.senderBase && seq < s.senderBase + cfg.windowSize) {
       slot.status = 'timeout';
       slot.timeoutFlashUntil = Date.now() + 800;
       appendLog(s, 'TIMEOUT', `TIMEOUT for Frame #${seq}! Retransmitting selectively...`);
-
-      dispatchFrame(seq, true);
-      startSrTimer(seq);
+      
       stateRef.current = s;
       setState(s);
+      dispatchFrame(seq, true);
+    } else {
+      stopSrTimer(seq);
     }
-  }, [dispatchFrame, startSrTimer]);
+  }, [dispatchFrame, stopSrTimer]);
+
 
   // --- VIRTUAL SIMULATION CLOCK TICK ---
   useEffect(() => {

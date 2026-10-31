@@ -43,55 +43,62 @@ export const DiagnosticsPanel = React.memo(function DiagnosticsPanel({
       : recentLogs.filter((entry) => entry.tag === filterTag);
 
   return (
-    <aside className="w-full h-full bg-[#0c0c0e] border-l border-[#27272a] flex flex-col overflow-hidden select-none font-mono">
-      {/* Telemetry HUD (Memoized) */}
-      <TelemetryHUD
-        totalSent={state.totalSent}
-        totalDelivered={state.totalDelivered}
-        totalRetransmissions={state.totalRetransmissions}
-        totalPackets={config.totalPackets}
-        protocol={config.protocol}
-        windowSize={config.windowSize}
-        simTime={state.simTime}
-        timeoutDuration={config.timeoutDuration}
-        isComplete={state.isComplete}
-      />
-
-      {/* Manual Fault Injections Section */}
-      <div className="p-2.5 border-b border-[#27272a] bg-[#09090b]">
-        <div className="text-[9px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">
-          Manual Fault Injections
+    <aside className="w-full h-full bg-[#0c0c0e] border-t lg:border-t-0 lg:border-l border-[#27272a] flex flex-col overflow-hidden select-none font-mono">
+      
+      {/* Layout shifts to side-by-side or stacked grid depending on breakpoint */}
+      <div className="flex flex-col md:flex-row lg:flex-col border-b border-[#27272a] bg-[#09090b]">
+        
+        {/* Telemetry Strip - Scales cleanly inside container boundaries */}
+        <div className="flex-1 border-b md:border-b-0 md:border-r lg:border-r-0 lg:border-b border-[#27272a]">
+          <TelemetryHUD
+            totalSent={state.totalSent}
+            totalDelivered={state.totalDelivered}
+            totalRetransmissions={state.totalRetransmissions}
+            totalPackets={config.totalPackets}
+            protocol={config.protocol}
+            windowSize={config.windowSize}
+            simTime={state.simTime}
+            timeoutDuration={config.timeoutDuration}
+            isComplete={state.isComplete}
+          />
         </div>
-        <div className="grid grid-cols-2 gap-1.5">
-          <button
-            onClick={onToggleDropFrame}
-            className={cn(
-              'flex items-center justify-center gap-1.5 px-2 py-1 rounded-xs border text-[10px] font-mono transition-colors cursor-pointer',
-              pendingDropFrame
-                ? 'bg-[#881337] border-[#be123c] text-white font-bold'
-                : 'bg-[#18181b] border-[#27272a] text-zinc-400 hover:text-zinc-200 hover:border-zinc-700',
-            )}
-          >
-            {pendingDropFrame ? <ZapOff size={10} /> : <Zap size={10} />}
-            <span>Drop Next Frame</span>
-          </button>
 
-          <button
-            onClick={onToggleDropAck}
-            className={cn(
-              'flex items-center justify-center gap-1.5 px-2 py-1 rounded-xs border text-[10px] font-mono transition-colors cursor-pointer',
-              pendingDropAck
-                ? 'bg-[#881337] border-[#be123c] text-white font-bold'
-                : 'bg-[#18181b] border-[#27272a] text-zinc-400 hover:text-zinc-200 hover:border-zinc-700',
-            )}
-          >
-            {pendingDropAck ? <ZapOff size={10} /> : <Zap size={10} />}
-            <span>Drop Next ACK</span>
-          </button>
+        {/* Manual Fault Injections Section */}
+        <div className="p-2.5 flex-1 flex flex-col justify-center">
+          <div className="text-[9px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">
+            Manual Fault Injections
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              onClick={onToggleDropFrame}
+              className={cn(
+                'flex items-center justify-center gap-1.5 px-2 py-2 rounded-xs border text-[10px] font-mono transition-colors cursor-pointer',
+                pendingDropFrame
+                  ? 'bg-[#881337] border-[#be123c] text-white font-bold'
+                  : 'bg-[#18181b] border-[#27272a] text-zinc-400 hover:text-zinc-200 hover:border-zinc-700',
+              )}
+            >
+              {pendingDropFrame ? <ZapOff size={10} /> : <Zap size={10} />}
+              <span>Drop Next Frame</span>
+            </button>
+
+            <button
+              onClick={onToggleDropAck}
+              className={cn(
+                'flex items-center justify-center gap-1.5 px-2 py-2 rounded-xs border text-[10px] font-mono transition-colors cursor-pointer',
+                pendingDropAck
+                  ? 'bg-[#881337] border-[#be123c] text-white font-bold'
+                  : 'bg-[#18181b] border-[#27272a] text-zinc-400 hover:text-zinc-200 hover:border-zinc-700',
+              )}
+            >
+              {pendingDropAck ? <ZapOff size={10} /> : <Zap size={10} />}
+              <span>Drop Next ACK</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Monospace Event Stream Header & Filters */}
+      {/* Log Stream Section Header */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#27272a] bg-[#111114]">
         <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
           <Terminal size={11} />
@@ -116,8 +123,10 @@ export const DiagnosticsPanel = React.memo(function DiagnosticsPanel({
         </div>
       </div>
 
-      {/* Monospace Event Stream Log Area (Memoized) */}
-      <EventLog entries={filteredLogs} />
+      {/* Event Log Window - Given a safe baseline height for mobile touch scrolling */}
+      <div className="flex-1 min-h-[200px] lg:min-h-0 flex flex-col overflow-hidden">
+        <EventLog entries={filteredLogs} />
+      </div>
     </aside>
   );
 });

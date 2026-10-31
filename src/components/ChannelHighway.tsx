@@ -43,7 +43,7 @@ export const ChannelHighway = React.memo(function ChannelHighway({
   return (
     <div
       ref={containerRef}
-      className="flex-1 relative bg-[#09090b] border-y border-[#27272a] flex overflow-hidden select-none"
+      className="flex-1 relative bg-[#09090b] border-y border-[#27272a] flex flex-row overflow-hidden select-none min-h-[340px] lg:min-h-0"
       style={{ '--travel-distance': `${laneDistance}px` } as React.CSSProperties}
     >
       {/* Background grid */}
@@ -72,11 +72,10 @@ export const ChannelHighway = React.memo(function ChannelHighway({
         {/* Central trajectory guide line */}
         <div className="absolute inset-y-12 left-1/2 w-px border-r border-dashed border-zinc-800/50 pointer-events-none" />
 
-        {/* Hardware-Accelerated Channel Motion Stage (Single-File Vertical Stream) */}
+        {/* Hardware-Accelerated Channel Motion Stage */}
         <div className="absolute inset-x-3 top-10 bottom-3 overflow-hidden">
           {dataPackets.map((pkt) => {
             const lateralShift = ((pkt.seq % 3) - 1) * 20;
-            // Earlier dispatched frame leads in front: higher zIndex for leading packets
             const zIndex = 30 + Math.max(0, 100 - (pkt.seq % 100));
 
             return (
@@ -139,7 +138,7 @@ export const ChannelHighway = React.memo(function ChannelHighway({
         {/* Central trajectory guide line */}
         <div className="absolute inset-y-12 left-1/2 w-px border-r border-dashed border-zinc-800/50 pointer-events-none" />
 
-        {/* Hardware-Accelerated Channel Motion Stage (Single-File Vertical Stream) */}
+        {/* Hardware-Accelerated Channel Motion Stage */}
         <div className="absolute inset-x-3 top-10 bottom-3 overflow-hidden">
           {ackPackets.map((ack) => {
             const lateralShift = ((ack.seq % 3) - 1) * 16;

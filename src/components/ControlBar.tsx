@@ -41,9 +41,6 @@ export const ControlBar = React.memo(function ControlBar({
             <span className="font-mono font-bold text-xs tracking-wider text-zinc-200">
               SLIDING_WINDOW
             </span>
-            <span className="text-[9px] font-mono px-1 py-0.5 rounded-xs bg-[#18181b] border border-[#27272a] text-zinc-400">
-              TU Berlin
-            </span>
           </div>
 
           {/* Protocol Toggle Buttons */}
